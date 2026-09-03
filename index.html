@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <script>
+      window.addEventListener('unhandledrejection', function(event) {
+        if (event.reason && (event.reason.name === 'Canceled' || event.reason.type === 'cancelation' || event.reason.message === 'Canceled' || event.reason.message === 'operation is manually canceled' || (event.reason.msg && event.reason.msg === 'operation is manually canceled'))) {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+        }
+      }, true); // Use capture phase to intercept before Vite!
+
+      const originalConsoleError = console.error;
+      console.error = function(...args) {
+        if (args.length > 0) {
+          const firstArg = args[0];
+          if (typeof firstArg === 'object' && firstArg !== null && (firstArg.type === 'cancelation' || firstArg.name === 'Canceled')) {
+            return;
+          }
+          if (typeof firstArg === 'string' && (firstArg.includes('operation is manually canceled') || firstArg.includes('Canceled'))) {
+            return;
+          }
+        }
+        originalConsoleError.apply(console, args);
+      };
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AiRus Compiler</title>
+    <meta name="description" content="High-performance C++ compiler and algorithm development environment." />
+    <meta property="og:title" content="AiRus Compiler" />
+    <meta property="og:description" content="High-performance C++ compiler and algorithm development environment." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+  </head>
+  <body class="bg-[#F7F5F0] text-[#1E1E1E] antialiased" style="font-family: 'Plus Jakarta Sans', sans-serif;">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
