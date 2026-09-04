@@ -1,10 +1,10 @@
 services:
   - type: web
-    name: c-compiler-backend
-    env: docker
-    dockerfilePath: Dockerfile
+    name: cpp-compiler-backend
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
     plan: free
-    region: oregon
     envVars:
       - key: NODE_ENV
         value: production
