@@ -125,7 +125,7 @@ function addDeletedId(id: string) {
   }
 }
 
-function getLocalPrograms(): Program[] {
+export function getLocalPrograms(): Program[] {
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (!raw) {
@@ -134,16 +134,16 @@ function getLocalPrograms(): Program[] {
     }
     const parsed: Program[] = JSON.parse(raw);
     const deleted = getDeletedIds();
-    return parsed.filter(p => !deleted.has(p.id));
+    return parsed.filter(p => p && p.id && !deleted.has(p.id));
   } catch {
     return DEFAULT_PROGRAMS;
   }
 }
 
-function saveLocalPrograms(programs: Program[]) {
+export function saveLocalPrograms(programs: Program[]) {
   try {
     const deleted = getDeletedIds();
-    const clean = programs.filter(p => !deleted.has(p.id));
+    const clean = programs.filter(p => p && p.id && !deleted.has(p.id));
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(clean));
   } catch (err) {
     console.error('Failed to save to local storage', err);
@@ -185,12 +185,14 @@ export async function fetchPrograms(): Promise<Program[]> {
     // Merge server with local updates without EVER wiping local code
     const mergedMap = new Map<string, Program>();
     for (const lp of local) {
-      if (!deleted.has(lp.id)) mergedMap.set(lp.id, lp);
+      if (lp && lp.id && !deleted.has(lp.id)) mergedMap.set(lp.id, lp);
     }
     for (const sp of serverPrograms) {
-      if (!deleted.has(sp.id)) {
+      if (sp && sp.id && !deleted.has(sp.id)) {
         const localItem = mergedMap.get(sp.id);
-        const resolvedContent = (sp.content && sp.content.trim()) ? sp.content : (localItem?.content || '');
+        const serverStr = typeof sp.content === 'string' ? sp.content : '';
+        const localStr = typeof localItem?.content === 'string' ? localItem.content : '';
+        const resolvedContent = (serverStr && serverStr.trim().length > 0) ? serverStr : localStr;
         mergedMap.set(sp.id, {
           ...localItem,
           ...sp,
@@ -216,9 +218,9 @@ export async function fetchProgram(id: string): Promise<Program> {
     const res = await fetch(`${API_URL}/api/programs/${id}`);
     if (res.ok) {
       const serverData = await res.json();
-      const resolvedContent = (serverData.content && serverData.content.trim()) 
-        ? serverData.content 
-        : (foundLocal?.content || '');
+      const serverStr = typeof serverData?.content === 'string' ? serverData.content : '';
+      const localStr = typeof foundLocal?.content === 'string' ? foundLocal.content : '';
+      const resolvedContent = (serverStr && serverStr.trim().length > 0) ? serverStr : localStr;
       
       const updated = {
         ...(foundLocal || {}),

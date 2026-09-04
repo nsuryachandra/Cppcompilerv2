@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Program, RunResult } from './types';
-import { fetchPrograms, fetchProgram, createProgram, updateProgram, deleteProgram, runProgram } from './lib/api';
+import { fetchPrograms, fetchProgram, createProgram, updateProgram, deleteProgram, runProgram, getLocalPrograms } from './lib/api';
 import { Sidebar } from './components/Sidebar';
 import { OutputPanel, FileRunHistoryItem } from './components/OutputPanel';
 import { NewProgramModal } from './components/NewProgramModal';
@@ -99,7 +99,7 @@ export default function App() {
   }, []);
 
   const handleSelectProgram = async (id: string) => {
-    if (!isSaved && activeId !== id) {
+    if (!isSaved && activeId && activeId !== id) {
       if (activeProgram) {
         await handleSave(activeProgram, code);
       }
@@ -107,22 +107,35 @@ export default function App() {
     
     setIsMobileSidebarOpen(false);
 
-    try {
-      const prog = await fetchProgram(id);
-      setActiveProgram(prog);
+    // 1. Instantly get from local state (0ms latency, zero 404s!)
+    const localList = getLocalPrograms();
+    const immediateProg = localList.find(p => p.id === id) || programs.find(p => p.id === id);
+    
+    if (immediateProg) {
+      setActiveProgram(immediateProg);
       setActiveId(id);
-      setCode(prog.content || '');
+      setCode(typeof immediateProg.content === 'string' ? immediateProg.content : '');
       setIsSaved(true);
       localStorage.setItem(LAST_ACTIVE_KEY, id);
       
-      // Load file history if not in memory
       if (!historyMap[id]) {
         const loaded = getProgramHistory(id);
         setHistoryMap(prev => ({ ...prev, [id]: loaded }));
       }
-    } catch (err) {
-      console.error(err);
     }
+
+    try {
+      const prog = await fetchProgram(id);
+      if (prog) {
+        setActiveProgram(prog);
+        setActiveId(id);
+        if (typeof prog.content === 'string') {
+          setCode(prog.content);
+        }
+        setIsSaved(true);
+        localStorage.setItem(LAST_ACTIVE_KEY, id);
+      }
+    } catch (_) {}
   };
 
   const handleCreateProgram = async (name: string, content?: string, folder?: string) => {

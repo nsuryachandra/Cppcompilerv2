@@ -355,27 +355,28 @@ export function OutputPanel({
 
   // Helper to render output with user input naturally inline (e.g. name: surya)
   const renderInteractiveRunOutput = (run: FileRunHistoryItem) => {
-    const out = run.result.runOutput || '';
-    const cleanStdin = run.stdin?.trim();
+    const out = typeof run?.result?.runOutput === 'string' ? run.result.runOutput : '';
+    const cleanStdin = typeof run?.stdin === 'string' ? run.stdin.trim() : '';
 
     if (!cleanStdin || !out) {
       return (
         <pre className="text-[#E2E8F0] whitespace-pre-wrap font-mono text-[13px] leading-relaxed selection:bg-emerald-500/30 py-0.5">
-          {out || (run.result.exitCode === 0 ? '(Program finished with exit code 0 and produced no standard output)' : '')}
+          {out || (run?.result?.exitCode === 0 ? '(Program finished with exit code 0 and produced no standard output)' : '')}
         </pre>
       );
     }
 
     const lines = out.split('\n');
-    const firstLine = lines[0] || '';
+    const firstLine = typeof lines[0] === 'string' ? lines[0] : '';
     const restLines = lines.slice(1);
+    const trimmedPrompt = typeof firstLine === 'string' ? firstLine.trim() : '';
 
-    const isPrompt = firstLine.trim().endsWith(':') || 
-                     firstLine.trim().endsWith('?') || 
-                     firstLine.toLowerCase().includes('enter') || 
-                     firstLine.toLowerCase().includes('name') ||
-                     firstLine.toLowerCase().includes('length') ||
-                     firstLine.toLowerCase().includes('input');
+    const isPrompt = trimmedPrompt.endsWith(':') || 
+                     trimmedPrompt.endsWith('?') || 
+                     trimmedPrompt.toLowerCase().includes('enter') || 
+                     trimmedPrompt.toLowerCase().includes('name') ||
+                     trimmedPrompt.toLowerCase().includes('length') ||
+                     trimmedPrompt.toLowerCase().includes('input');
 
     if (isPrompt && !firstLine.includes(cleanStdin)) {
       return (
