@@ -211,7 +211,7 @@ export default function App() {
     saveProgramHistory(activeProgram.id, []);
   };
 
-  const handleRun = async () => {
+  const handleRun = async (directStdin?: string) => {
     if (!activeProgram || isRunning) return;
     
     const currentCode = code;
@@ -221,7 +221,7 @@ export default function App() {
     
     setIsRunning(true);
     const progId = activeProgram.id;
-    const currentStdin = activeStdin;
+    const currentStdin = directStdin !== undefined ? directStdin : activeStdin;
 
     try {
       const res = await runProgram(progId, currentStdin, currentCode);
@@ -231,7 +231,7 @@ export default function App() {
         id: `run_${Date.now()}`,
         runNumber: prevRuns.length + 1,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        stdin: currentStdin.trim() ? currentStdin : undefined,
+        stdin: currentStdin && currentStdin.trim() ? currentStdin : undefined,
         result: res
       };
       
@@ -244,7 +244,7 @@ export default function App() {
         id: `run_${Date.now()}`,
         runNumber: prevRuns.length + 1,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        stdin: currentStdin.trim() ? currentStdin : undefined,
+        stdin: currentStdin && currentStdin.trim() ? currentStdin : undefined,
         result: {
           success: false,
           compileOutput: '',
@@ -459,14 +459,13 @@ export default function App() {
               />
             </div>
             
-            {/* Standout Terminal Output Panel */}
+            {/* Standout Terminal Output Panel with Direct Input */}
             <OutputPanel 
               programId={activeProgram.id}
               programName={activeProgram.name}
               history={activeHistory}
               isRunning={isRunning}
-              stdin={activeStdin}
-              onStdinChange={handleStdinChange}
+              onRunDirect={(stdinVal) => handleRun(stdinVal)}
               onClearHistory={handleClearHistory}
               cppStandard={activeProgram.cpp_standard}
             />

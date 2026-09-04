@@ -15,10 +15,8 @@ import {
   Play,
   CornerDownLeft,
   Sparkles,
-  FileInput,
-  Trash2,
-  SlidersHorizontal,
-  Info
+  Info,
+  Send
 } from 'lucide-react';
 import { RunResult } from '../types';
 import { cn } from '../lib/utils';
@@ -35,7 +33,7 @@ export interface FileRunHistoryItem {
 export interface TerminalTab {
   id: string;
   name: string;
-  type: 'main' | 'stdin' | 'interactive';
+  type: 'main' | 'interactive';
   history?: Array<{
     id: string;
     command: string;
@@ -50,8 +48,7 @@ interface OutputPanelProps {
   programName?: string;
   history: FileRunHistoryItem[];
   isRunning: boolean;
-  stdin: string;
-  onStdinChange: (val: string) => void;
+  onRunDirect: (stdinValue?: string) => void;
   onClearHistory: () => void;
   cppStandard?: string;
 }
@@ -69,36 +66,38 @@ export function OutputPanel({
   programName,
   history, 
   isRunning, 
-  stdin,
-  onStdinChange,
+  onRunDirect,
   onClearHistory, 
   cppStandard = 'C++23' 
 }: OutputPanelProps) {
   const [copied, setCopied] = useState(false);
   
   // Height & Resizing state
-  const [height, setHeight] = useState<number>(270);
+  const [height, setHeight] = useState<number>(290);
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   
   // Ref for tracking drag calculations
   const dragStartYRef = useRef<number>(0);
-  const dragStartHeightRef = useRef<number>(270);
+  const dragStartHeightRef = useRef<number>(290);
 
   // Terminal Tabs State
   const [tabs, setTabs] = useState<TerminalTab[]>([
     { id: 'main', name: 'Terminal Output', type: 'main' },
-    { id: 'stdin', name: 'Input (stdin)', type: 'stdin' },
   ]);
   const [activeTabId, setActiveTabId] = useState<string>('main');
 
-  // Interactive Terminal Input State
-  const [inputValue, setInputValue] = useState('');
+  // Direct Interactive Stdin on Main Terminal
+  const [directInput, setDirectInput] = useState('');
+  const mainInputRef = useRef<HTMLInputElement>(null);
+
+  // Interactive Snippet Terminal Input State
+  const [snippetInput, setSnippetInput] = useState('');
   const [isExecutingSnippet, setIsExecutingSnippet] = useState(false);
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
 
-  const inputRef = useRef<HTMLInputElement>(null);
+  const snippetInputRef = useRef<HTMLInputElement>(null);
   const terminalScrollRef = useRef<HTMLDivElement>(null);
 
   // Auto switch to main tab when program is running
@@ -117,6 +116,17 @@ export function OutputPanel({
   }, [history, isRunning, tabs, activeTabId]);
 
   const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
+
+  // Submit direct input for the C++ program (cin / scanf)
+  const handleSendDirectInput = () => {
+    if (isRunning) return;
+    const val = directInput;
+    onRunDirect(val);
+    setDirectInput('');
+    setTimeout(() => {
+      mainInputRef.current?.focus();
+    }, 50);
+  };
 
   // Add a new interactive terminal tab
   const handleAddTerminal = () => {
@@ -146,14 +156,14 @@ export function OutputPanel({
     setActiveTabId(newId);
     setIsCollapsed(false);
     setTimeout(() => {
-      inputRef.current?.focus();
+      snippetInputRef.current?.focus();
     }, 100);
   };
 
   // Close an extra terminal tab
   const handleCloseTab = (e: React.MouseEvent, idToClose: string) => {
     e.stopPropagation();
-    if (idToClose === 'main' || idToClose === 'stdin') return;
+    if (idToClose === 'main') return;
 
     setTabs(prev => {
       const filtered = prev.filter(t => t.id !== idToClose);
@@ -168,8 +178,6 @@ export function OutputPanel({
   const handleClearCurrentTab = () => {
     if (activeTab.type === 'main') {
       onClearHistory();
-    } else if (activeTab.type === 'stdin') {
-      onStdinChange('');
     } else {
       setTabs(prev => prev.map(t => {
         if (t.id === activeTabId) {
@@ -182,12 +190,12 @@ export function OutputPanel({
 
   // Execute snippet in interactive terminal
   const handleRunSnippet = async (codeToRun?: string) => {
-    const snippet = (codeToRun !== undefined ? codeToRun : inputValue).trim();
+    const snippet = (codeToRun !== undefined ? codeToRun : snippetInput).trim();
     if (!snippet || isExecutingSnippet) return;
 
     setCommandHistory(prev => [snippet, ...prev.filter(c => c !== snippet)]);
     setHistoryIndex(-1);
-    setInputValue('');
+    setSnippetInput('');
     setIsExecutingSnippet(true);
 
     const entryId = `cmd_${Date.now()}`;
@@ -212,7 +220,7 @@ export function OutputPanel({
     }));
 
     try {
-      const res = await runSnippet(snippet, cppStandard, stdin);
+      const res = await runSnippet(snippet, cppStandard, directInput);
       setTabs(prev => prev.map(t => {
         if (t.id === activeTabId) {
           return {
@@ -259,29 +267,8 @@ export function OutputPanel({
     } finally {
       setIsExecutingSnippet(false);
       setTimeout(() => {
-        inputRef.current?.focus();
+        snippetInputRef.current?.focus();
       }, 50);
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleRunSnippet();
-    } else if (e.key === 'ArrowUp') {
-      if (commandHistory.length > 0) {
-        e.preventDefault();
-        const nextIdx = Math.min(historyIndex + 1, commandHistory.length - 1);
-        setHistoryIndex(nextIdx);
-        setInputValue(commandHistory[nextIdx]);
-      }
-    } else if (e.key === 'ArrowDown') {
-      if (commandHistory.length > 0) {
-        e.preventDefault();
-        const nextIdx = Math.max(historyIndex - 1, -1);
-        setHistoryIndex(nextIdx);
-        setInputValue(nextIdx === -1 ? '' : commandHistory[nextIdx]);
-      }
     }
   };
 
@@ -292,11 +279,9 @@ export function OutputPanel({
         const out = h.result.compileOutput !== 'Success' && h.result.compileOutput.trim()
           ? h.result.compileOutput
           : h.result.runOutput || 'Program exited with code 0';
-        return `[Run #${h.runNumber} - ${h.timestamp}]\n${h.stdin ? `stdin: ${h.stdin}\n` : ''}${out}`;
+        return `[Run #${h.runNumber} - ${h.timestamp}]\n${h.stdin ? `input: ${h.stdin}\n` : ''}${out}`;
       }).join('\n\n' + '='.repeat(40) + '\n\n');
       navigator.clipboard.writeText(allRuns);
-    } else if (activeTab.type === 'stdin') {
-      navigator.clipboard.writeText(stdin);
     } else {
       const logs = (activeTab.history || []).map(h => {
         const out = h.result?.runOutput || h.result?.compileOutput || '';
@@ -368,7 +353,52 @@ export function OutputPanel({
     setHeight(targetHeight);
   };
 
-  const hasStdin = stdin.trim().length > 0;
+  // Helper to render output with user input naturally inline (e.g. name: surya)
+  const renderInteractiveRunOutput = (run: FileRunHistoryItem) => {
+    const out = run.result.runOutput || '';
+    const cleanStdin = run.stdin?.trim();
+
+    if (!cleanStdin || !out) {
+      return (
+        <pre className="text-[#E2E8F0] whitespace-pre-wrap font-mono text-[13px] leading-relaxed selection:bg-emerald-500/30 py-0.5">
+          {out || (run.result.exitCode === 0 ? '(Program finished with exit code 0 and produced no standard output)' : '')}
+        </pre>
+      );
+    }
+
+    const lines = out.split('\n');
+    const firstLine = lines[0] || '';
+    const restLines = lines.slice(1);
+
+    const isPrompt = firstLine.trim().endsWith(':') || 
+                     firstLine.trim().endsWith('?') || 
+                     firstLine.toLowerCase().includes('enter') || 
+                     firstLine.toLowerCase().includes('name') ||
+                     firstLine.toLowerCase().includes('length') ||
+                     firstLine.toLowerCase().includes('input');
+
+    if (isPrompt && !firstLine.includes(cleanStdin)) {
+      return (
+        <div className="font-mono text-[13px] leading-relaxed selection:bg-emerald-500/30 py-0.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[#E2E8F0]">{firstLine}</span>
+            <span className="text-emerald-300 font-bold bg-emerald-500/15 px-1.5 py-0.2 rounded border border-emerald-500/30">
+              {cleanStdin}
+            </span>
+          </div>
+          {restLines.length > 0 && (
+            <pre className="text-[#E2E8F0] whitespace-pre-wrap mt-1">{restLines.join('\n')}</pre>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-1 font-mono text-[13px] leading-relaxed selection:bg-emerald-500/30 py-0.5">
+        <pre className="text-[#E2E8F0] whitespace-pre-wrap">{out}</pre>
+      </div>
+    );
+  };
 
   return (
     <div 
@@ -420,7 +450,9 @@ export function OutputPanel({
                     setActiveTabId(tab.id);
                     setIsCollapsed(false);
                     if (tab.type === 'interactive') {
-                      setTimeout(() => inputRef.current?.focus(), 100);
+                      setTimeout(() => snippetInputRef.current?.focus(), 100);
+                    } else {
+                      setTimeout(() => mainInputRef.current?.focus(), 100);
                     }
                   }}
                   className={cn(
@@ -432,8 +464,6 @@ export function OutputPanel({
                 >
                   {tab.type === 'main' ? (
                     <TerminalIcon className="w-3 h-3 text-[#34D399] shrink-0" />
-                  ) : tab.type === 'stdin' ? (
-                    <FileInput className={cn("w-3 h-3 shrink-0", hasStdin ? "text-amber-400" : "text-[#94A3B8]")} />
                   ) : (
                     <Sparkles className="w-3 h-3 text-amber-400 shrink-0" />
                   )}
@@ -445,11 +475,6 @@ export function OutputPanel({
                     <span className="px-1.5 py-0.2 bg-[#1A1D27] border border-[#373E52] text-[#94A3B8] rounded text-[9px] font-bold">
                       {history.length}
                     </span>
-                  )}
-
-                  {/* Stdin Indicator */}
-                  {tab.type === 'stdin' && hasStdin && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Custom input active" />
                   )}
 
                   {/* Running Spinner on Main */}
@@ -491,30 +516,30 @@ export function OutputPanel({
           <div className="hidden md:flex items-center gap-1 bg-[#181A22] p-0.5 rounded-md border border-[#2A2E3C] text-[10px] font-semibold text-[#858E9E]">
             <button
               type="button"
-              onClick={() => setPreset(160)}
+              onClick={() => setPreset(180)}
               className={cn(
                 "px-2 py-0.5 rounded transition-colors",
-                !isCollapsed && height <= 190 ? "bg-[#2A2E3C] text-white" : "hover:text-white"
+                !isCollapsed && height <= 210 ? "bg-[#2A2E3C] text-white" : "hover:text-white"
               )}
             >
               Compact
             </button>
             <button
               type="button"
-              onClick={() => setPreset(270)}
+              onClick={() => setPreset(290)}
               className={cn(
                 "px-2 py-0.5 rounded transition-colors",
-                !isCollapsed && height > 190 && height < 380 ? "bg-[#2A2E3C] text-white" : "hover:text-white"
+                !isCollapsed && height > 210 && height < 400 ? "bg-[#2A2E3C] text-white" : "hover:text-white"
               )}
             >
               Default
             </button>
             <button
               type="button"
-              onClick={() => setPreset(420)}
+              onClick={() => setPreset(440)}
               className={cn(
                 "px-2 py-0.5 rounded transition-colors",
-                !isCollapsed && height >= 380 ? "bg-[#2A2E3C] text-white" : "hover:text-white"
+                !isCollapsed && height >= 400 ? "bg-[#2A2E3C] text-white" : "hover:text-white"
               )}
             >
               Large
@@ -546,177 +571,144 @@ export function OutputPanel({
 
       {/* Terminal Screen Body */}
       {!isCollapsed && (
-        <div 
-          ref={terminalScrollRef}
-          className="flex-1 overflow-auto p-3 sm:p-4 custom-scrollbar text-[12.5px] leading-relaxed bg-[#161820] font-mono select-text"
-        >
+        <div className="flex-1 flex flex-col min-h-0 bg-[#161820]">
           {activeTab.type === 'main' ? (
             /* ========================================================================= */
-            /* TAB 1: MAIN BUILD & RUN TAB (PER-FILE RUN HISTORY)                       */
+            /* TAB 1: MAIN TERMINAL WITH DIRECT INLINE INPUT (CIN / SCANF)              */
             /* ========================================================================= */
-            <div className="space-y-4">
-              {/* Ready / Starter Notice */}
-              {history.length === 0 && !isRunning && (
-                <div className="flex flex-col justify-between text-[#64748B] py-2 space-y-2">
-                  <div className="flex items-center gap-2 text-xs text-[#94A3B8]">
-                    <span className="text-emerald-400 font-semibold">AiRus GCC / G++ Live Runner</span>
-                    <span>•</span>
-                    <span className="text-zinc-400">{cppStandard}</span>
-                    <span>•</span>
-                    <span className="text-emerald-400/80 font-mono text-[11px]">{programName || 'Active File'}</span>
-                  </div>
-                  <div className="pt-2 flex items-center gap-2 text-[#94A3B8] text-xs">
-                    <span className="text-emerald-400 font-bold">$</span>
-                    <span>Click <strong className="text-[#E2E8F0] font-semibold">"Run Code"</strong> (⌘ + Enter) to execute.</span>
-                  </div>
-                  <div className="pt-2 flex items-center gap-2 text-[11px] text-[#64748B]">
-                    <Info className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                    <span>For programs expecting inputs (<code className="text-amber-300">cin &gt;&gt; var</code>), provide inputs in the <button onClick={() => setActiveTabId('stdin')} className="text-amber-400 underline font-bold">Input (stdin)</button> tab!</span>
-                  </div>
-                </div>
-              )}
-
-              {/* Render each historical run for this file */}
-              {history.map((run, idx) => {
-                const isCompileErr = run.result.compileOutput !== 'Success' && !run.result.success && run.result.compileOutput.trim().length > 0;
-                return (
-                  <div 
-                    key={run.id || idx} 
-                    className="space-y-2 pb-3 border-b border-[#252A38] last:border-0"
-                  >
-                    {/* Run Header */}
-                    <div className="flex items-center justify-between text-xs pb-1 border-b border-[#202430]">
-                      <div className="flex items-center gap-2">
-                        <span className="text-emerald-400 font-bold">❯</span>
-                        <span className="text-white font-bold">./a.out</span>
-                        <span className="px-1.5 py-0.2 bg-[#232838] text-emerald-300 rounded text-[10px] font-bold">
-                          Run #{run.runNumber}
-                        </span>
-                        {run.stdin && (
-                          <span className="px-1.5 py-0.2 bg-amber-500/10 text-amber-300 border border-amber-500/20 rounded text-[10px] truncate max-w-[160px]" title={`stdin: ${run.stdin}`}>
-                            stdin: {run.stdin.replace(/\n/g, ' ')}
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-[10px] text-[#64748B]">{run.timestamp}</span>
+            <div className="flex-1 flex flex-col min-h-0 justify-between">
+              {/* Output Scrollable Area */}
+              <div 
+                ref={terminalScrollRef}
+                className="flex-1 overflow-auto p-3 sm:p-4 custom-scrollbar text-[12.5px] leading-relaxed font-mono select-text space-y-4"
+              >
+                {/* Ready Starter Notice */}
+                {history.length === 0 && !isRunning && (
+                  <div className="flex flex-col justify-between text-[#64748B] py-2 space-y-2">
+                    <div className="flex items-center gap-2 text-xs text-[#94A3B8]">
+                      <span className="text-emerald-400 font-semibold">AiRus GCC / G++ Live Runner</span>
+                      <span>•</span>
+                      <span className="text-zinc-400">{cppStandard}</span>
+                      <span>•</span>
+                      <span className="text-emerald-400/80 font-mono text-[11px]">{programName || 'Active File'}</span>
                     </div>
-
-                    {/* Output Content */}
-                    {isCompileErr ? (
-                      <div className="space-y-1.5 pt-1">
-                        <div className="flex items-center gap-2 text-rose-400 text-xs font-bold">
-                          <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                          <span>Compiler Diagnostics:</span>
-                        </div>
-                        <div className="bg-[#24171A] border border-rose-500/25 rounded-xl p-3 text-rose-200 whitespace-pre-wrap font-mono text-xs leading-relaxed selection:bg-rose-500/30">
-                          {run.result.compileOutput}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="pt-1">
-                        {run.result.runOutput ? (
-                          <pre className="text-[#E2E8F0] whitespace-pre-wrap font-mono text-[13px] leading-relaxed selection:bg-emerald-500/30 py-0.5">
-                            {run.result.runOutput}
-                          </pre>
-                        ) : (
-                          <div className="text-[#64748B] italic text-xs py-0.5">
-                            (Program finished with exit code {run.result.exitCode} and produced no standard output)
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Run Status Footer */}
-                    <div className="pt-1 flex items-center justify-between text-[11px] text-[#64748B]">
-                      <span className={cn(
-                        "flex items-center gap-1 font-semibold text-[11px]",
-                        run.result.exitCode === 0 ? "text-emerald-400" : "text-rose-400"
-                      )}>
-                        {run.result.exitCode === 0 ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
-                        <span>Exited with code {run.result.exitCode} in {run.result.timeMs}ms</span>
-                      </span>
-                      <span className="text-[#64748B] text-[10px] font-mono">ISO {cppStandard}</span>
+                    <div className="pt-2 flex items-center gap-2 text-[#94A3B8] text-xs">
+                      <span className="text-emerald-400 font-bold">$</span>
+                      <span>Click <strong className="text-[#E2E8F0] font-semibold">"Run Code"</strong> or enter your inputs directly in the prompt below.</span>
                     </div>
                   </div>
-                );
-              })}
+                )}
 
-              {/* In-progress Active Spinner */}
-              {isRunning && (
-                <div className="flex flex-col items-center justify-center py-6 gap-2 text-[#94A3B8] border-t border-[#252A38]">
-                  <div className="relative">
-                    <div className="w-6 h-6 border-2 border-emerald-500/20 border-t-emerald-400 rounded-full animate-spin" />
-                    <Cpu className="w-3 h-3 text-emerald-400 absolute inset-0 m-auto" />
-                  </div>
-                  <div className="text-center">
-                    <p className="text-xs font-semibold text-[#CBD5E1]">g++ -std={cppStandard.toLowerCase()} {programName || 'main.cpp'}</p>
-                    <p className="text-[11px] text-[#64748B] mt-0.5">Compiling and running...</p>
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : activeTab.type === 'stdin' ? (
-            /* ========================================================================= */
-            /* TAB 2: STANDARD INPUT (STDIN) DRAWER                                      */
-            /* ========================================================================= */
-            <div className="flex flex-col h-full space-y-3">
-              <div className="flex items-center justify-between pb-1 border-b border-[#252A38]">
-                <div className="flex items-center gap-1.5 text-xs text-[#CBD5E1] font-semibold">
-                  <FileInput className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Program Standard Input (stdin)</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  {hasStdin && (
-                    <button
-                      type="button"
-                      onClick={() => onStdinChange('')}
-                      className="text-[10px] text-rose-400 hover:text-rose-300 font-semibold px-2 py-0.5 rounded hover:bg-rose-500/10 transition-colors"
+                {/* Render each historical run for this file */}
+                {history.map((run, idx) => {
+                  const isCompileErr = run.result.compileOutput !== 'Success' && !run.result.success && run.result.compileOutput.trim().length > 0;
+                  return (
+                    <div 
+                      key={run.id || idx} 
+                      className="space-y-2 pb-3 border-b border-[#252A38] last:border-0"
                     >
-                      Clear Input
-                    </button>
-                  )}
-                </div>
+                      {/* Run Header */}
+                      <div className="flex items-center justify-between text-xs pb-1 border-b border-[#202430]">
+                        <div className="flex items-center gap-2">
+                          <span className="text-emerald-400 font-bold">❯</span>
+                          <span className="text-white font-bold">./a.out</span>
+                          <span className="px-1.5 py-0.2 bg-[#232838] text-emerald-300 rounded text-[10px] font-bold">
+                            Run #{run.runNumber}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-[#64748B]">{run.timestamp}</span>
+                      </div>
+
+                      {/* Output Content with user input naturally inline */}
+                      {isCompileErr ? (
+                        <div className="space-y-1.5 pt-1">
+                          <div className="flex items-center gap-2 text-rose-400 text-xs font-bold">
+                            <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                            <span>Compiler Diagnostics:</span>
+                          </div>
+                          <div className="bg-[#24171A] border border-rose-500/25 rounded-xl p-3 text-rose-200 whitespace-pre-wrap font-mono text-xs leading-relaxed selection:bg-rose-500/30">
+                            {run.result.compileOutput}
+                          </div>
+                        </div>
+                      ) : (
+                        renderInteractiveRunOutput(run)
+                      )}
+
+                      {/* Run Status Footer */}
+                      <div className="pt-1 flex items-center justify-between text-[11px] text-[#64748B]">
+                        <span className={cn(
+                          "flex items-center gap-1 font-semibold text-[11px]",
+                          run.result.exitCode === 0 ? "text-emerald-400" : "text-rose-400"
+                        )}>
+                          {run.result.exitCode === 0 ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
+                          <span>Exited with code {run.result.exitCode} in {run.result.timeMs}ms</span>
+                        </span>
+                        <span className="text-[#64748B] text-[10px] font-mono">ISO {cppStandard}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* In-progress Active Spinner */}
+                {isRunning && (
+                  <div className="flex flex-col items-center justify-center py-6 gap-2 text-[#94A3B8] border-t border-[#252A38]">
+                    <div className="relative">
+                      <div className="w-6 h-6 border-2 border-emerald-500/20 border-t-emerald-400 rounded-full animate-spin" />
+                      <Cpu className="w-3 h-3 text-emerald-400 absolute inset-0 m-auto" />
+                    </div>
+                    <div className="text-center">
+                      <p className="text-xs font-semibold text-[#CBD5E1]">g++ -std={cppStandard.toLowerCase()} {programName || 'main.cpp'}</p>
+                      <p className="text-[11px] text-[#64748B] mt-0.5">Compiling and running...</p>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              <div className="text-[11px] text-[#94A3B8] leading-relaxed">
-                Provide the values that your C++ code expects via <code className="text-amber-300 bg-[#222634] px-1 py-0.5 rounded">cin &gt;&gt; var;</code>, <code className="text-amber-300 bg-[#222634] px-1 py-0.5 rounded">getline(cin, str);</code>, or <code className="text-amber-300 bg-[#222634] px-1 py-0.5 rounded">scanf(...)</code>.
-              </div>
-
-              <textarea
-                value={stdin}
-                onChange={(e) => onStdinChange(e.target.value)}
-                placeholder="Enter input values here (e.g.&#10;25 40&#10;or each value on a new line)..."
-                rows={5}
-                className="w-full flex-1 bg-[#1C1F2B] border border-[#2D3345] focus:border-emerald-500/70 rounded-xl p-3 text-xs text-[#E2E8F0] font-mono placeholder-[#64748B] outline-hidden resize-none custom-scrollbar shadow-inner"
-              />
-
-              {/* Sample preset input chips */}
-              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar text-[10px] pt-1">
-                <span className="text-[#64748B] font-semibold shrink-0">Sample Inputs:</span>
-                {[
-                  { label: '10 20', val: '10 20' },
-                  { label: '42', val: '42' },
-                  { label: '5 \n 1 2 3 4 5', val: '5\n1 2 3 4 5' },
-                  { label: 'Hello World', val: 'Hello World' },
-                ].map((item, idx) => (
+              {/* DIRECT TERMINAL INTERACTIVE PROMPT BAR (AT BOTTOM OF TERMINAL) */}
+              <div className="p-2.5 bg-[#171922] border-t border-[#252A38] shrink-0">
+                <div className="flex items-center gap-2 bg-[#1E2230] border border-[#2F364B] focus-within:border-emerald-500/80 rounded-xl px-3 py-1.5 shadow-inner transition-colors">
+                  <span className="text-emerald-400 font-bold text-sm select-none">❯</span>
+                  <input
+                    ref={mainInputRef}
+                    type="text"
+                    value={directInput}
+                    onChange={(e) => setDirectInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSendDirectInput();
+                      }
+                    }}
+                    disabled={isRunning}
+                    placeholder='Type input for cin/scanf (e.g. surya or 25 40) and press Enter ↵'
+                    className="flex-1 bg-transparent border-0 outline-hidden text-[#E2E8F0] placeholder-[#64748B] text-xs font-mono"
+                  />
+                  
                   <button
-                    key={idx}
                     type="button"
-                    onClick={() => onStdinChange(item.val)}
-                    className="px-2 py-0.5 rounded bg-[#202533] hover:bg-[#2B3145] text-[#94A3B8] hover:text-white border border-[#2D3344] whitespace-nowrap transition-colors cursor-pointer shrink-0"
+                    onClick={handleSendDirectInput}
+                    disabled={isRunning}
+                    className={cn(
+                      "flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-all shrink-0 active:scale-95 shadow-xs cursor-pointer",
+                      directInput.trim()
+                        ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs"
+                        : "bg-[#282E40] hover:bg-[#32394E] text-[#94A3B8] hover:text-white"
+                    )}
+                    title="Send input and run"
                   >
-                    {item.label}
+                    <span>{directInput.trim() ? "Send & Run" : "Run"}</span>
+                    <CornerDownLeft className="w-3.5 h-3.5" />
                   </button>
-                ))}
+                </div>
               </div>
             </div>
           ) : (
             /* ========================================================================= */
-            /* TAB 3+: DIRECT C++ RUNNER / INTERACTIVE TERMINAL                         */
+            /* TAB 2+: DIRECT C++ RUNNER / INTERACTIVE SNIPPET TERMINAL                 */
             /* ========================================================================= */
-            <div className="flex flex-col h-full justify-between gap-3">
+            <div className="flex-1 flex flex-col min-h-0 justify-between">
               {/* Output & Execution History */}
-              <div className="space-y-3 overflow-y-auto pr-1">
+              <div className="flex-1 overflow-auto p-3 sm:p-4 custom-scrollbar text-[12.5px] leading-relaxed font-mono select-text space-y-3">
                 {(activeTab.history || []).length === 0 ? (
                   <div className="text-[#64748B] py-2 text-xs">
                     Terminal ready. Type any C++ code (e.g. <code className="text-emerald-400">cout &lt;&lt; 2 + 2;</code>) below and press Enter.
@@ -776,7 +768,7 @@ export function OutputPanel({
               </div>
 
               {/* Bottom Interactive Prompt & Quick Examples */}
-              <div className="pt-2 border-t border-[#252A38] bg-[#161820] shrink-0 space-y-2">
+              <div className="p-2.5 bg-[#171922] border-t border-[#252A38] shrink-0 space-y-2">
                 <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar text-[10px]">
                   <span className="text-[#64748B] font-semibold shrink-0">Quick:</span>
                   {QUICK_SNIPPETS.map((chip, idx) => (
@@ -792,14 +784,19 @@ export function OutputPanel({
                   ))}
                 </div>
 
-                <div className="flex items-center gap-2 bg-[#1C1F2B] border border-[#2D3345] focus-within:border-emerald-500/70 rounded-xl px-3 py-1.5 shadow-inner transition-colors">
+                <div className="flex items-center gap-2 bg-[#1E2230] border border-[#2F364B] focus-within:border-emerald-500/80 rounded-xl px-3 py-1.5 shadow-inner transition-colors">
                   <span className="text-emerald-400 font-bold text-sm select-none">❯</span>
                   <input
-                    ref={inputRef}
+                    ref={snippetInputRef}
                     type="text"
-                    value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
-                    onKeyDown={handleKeyDown}
+                    value={snippetInput}
+                    onChange={(e) => setSnippetInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleRunSnippet();
+                      }
+                    }}
                     disabled={isExecutingSnippet}
                     placeholder="Type small C++ line e.g. cout << 5*10; or pow(2,8) and press Enter"
                     className="flex-1 bg-transparent border-0 outline-hidden text-[#E2E8F0] placeholder-[#64748B] text-xs font-mono"
@@ -808,10 +805,10 @@ export function OutputPanel({
                   <button
                     type="button"
                     onClick={() => handleRunSnippet()}
-                    disabled={isExecutingSnippet || !inputValue.trim()}
+                    disabled={isExecutingSnippet || !snippetInput.trim()}
                     className={cn(
                       "flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase transition-all shrink-0 active:scale-95",
-                      inputValue.trim() && !isExecutingSnippet
+                      snippetInput.trim() && !isExecutingSnippet
                         ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs cursor-pointer"
                         : "bg-[#252A38] text-[#64748B] cursor-not-allowed"
                     )}

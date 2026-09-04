@@ -61,15 +61,10 @@ int main() {
 using namespace std;
 
 int main() {
-    int length, width;
-    cout << "Enter length and width: " << endl;
-    if (cin >> length >> width) {
-        int area = length * width;
-        int perimeter = 2 * (length + width);
-        cout << "Calculated Area: " << area << endl;
-        cout << "Calculated Perimeter: " << perimeter << endl;
-    } else {
-        cout << "Notice: Enter inputs in the 'Input (stdin)' tab below." << endl;
+    string name;
+    cout << "Enter name: ";
+    if (cin >> name) {
+        cout << "Hello, " << name << "! Welcome to AiRus C++ Compiler." << endl;
     }
     return 0;
 }
