@@ -320,19 +320,22 @@ export async function deleteProgram(id: string): Promise<void> {
   }
 }
 
-export async function runProgram(id: string, stdin?: string, content?: string): Promise<RunResult> {
+export async function runProgram(id: string, stdin?: unknown, content?: unknown): Promise<RunResult> {
+  const cleanStdin = typeof stdin === 'string' ? stdin : '';
+  const cleanContent = typeof content === 'string' ? content : '';
+
   try {
     const res = await fetch(`${API_URL}/api/programs/${id}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stdin, content })
+      body: JSON.stringify({ stdin: cleanStdin, content: cleanContent })
     });
-    if (!res.ok) throw new Error('Failed to run program');
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
     return await res.json();
   } catch (err) {
     return {
       success: false,
-      compileOutput: `[AiRus Compiler Notice]\nBackend server is unreachable (${String(err)}).\n\nPlease verify that your Render backend is running at:\n${API_URL || 'https://cppcompilerv2.onrender.com'}`,
+      compileOutput: `[AiRus Compiler Notice]\nBackend server request failed (${String(err)}).\n\nPlease ensure your Render backend is running at:\n${API_URL || 'https://cppcompilerv2.onrender.com'}`,
       runOutput: '',
       exitCode: 1,
       timeMs: 0
@@ -340,19 +343,23 @@ export async function runProgram(id: string, stdin?: string, content?: string): 
   }
 }
 
-export async function runSnippet(snippet: string, cppStandard: string = 'c++23', stdin?: string): Promise<RunResult> {
+export async function runSnippet(snippet: unknown, cppStandard: unknown = 'c++23', stdin?: unknown): Promise<RunResult> {
+  const cleanSnippet = typeof snippet === 'string' ? snippet : '';
+  const cleanStandard = typeof cppStandard === 'string' ? cppStandard : 'c++23';
+  const cleanStdin = typeof stdin === 'string' ? stdin : '';
+
   try {
     const res = await fetch(`${API_URL}/api/run-snippet`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ snippet, cpp_standard: cppStandard, stdin }),
+      body: JSON.stringify({ snippet: cleanSnippet, cpp_standard: cleanStandard, stdin: cleanStdin }),
     });
-    if (!res.ok) throw new Error('Failed to execute snippet');
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
     return await res.json();
   } catch (err) {
     return {
       success: false,
-      compileOutput: `[AiRus Compiler Notice]\nBackend server is unreachable (${String(err)}).`,
+      compileOutput: `[AiRus Compiler Notice]\nBackend server request failed (${String(err)}).`,
       runOutput: '',
       exitCode: 1,
       timeMs: 0

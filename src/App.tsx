@@ -213,28 +213,25 @@ export default function App() {
     ? (stdinMap[activeProgram.id] || '') 
     : '';
 
-  const handleStdinChange = (val: string) => {
-    if (!activeProgram) return;
-    setStdinMap(prev => ({ ...prev, [activeProgram.id]: val }));
-  };
-
   const handleClearHistory = () => {
     if (!activeProgram) return;
     setHistoryMap(prev => ({ ...prev, [activeProgram.id]: [] }));
     saveProgramHistory(activeProgram.id, []);
   };
 
-  const handleRun = async (directStdin?: string) => {
+  const handleRun = async (directStdin?: unknown) => {
     if (!activeProgram || isRunning) return;
     
-    const currentCode = code;
+    const currentCode = typeof code === 'string' ? code : '';
     if (!isSaved) {
       await handleSave(activeProgram, currentCode);
     }
     
     setIsRunning(true);
     const progId = activeProgram.id;
-    const currentStdin = directStdin !== undefined ? directStdin : activeStdin;
+    const currentStdin = typeof directStdin === 'string' 
+      ? directStdin 
+      : (typeof activeStdin === 'string' ? activeStdin : '');
 
     try {
       const res = await runProgram(progId, currentStdin, currentCode);
@@ -422,7 +419,7 @@ export default function App() {
                 </div>
                 
                 <button 
-                  onClick={handleRun}
+                  onClick={() => handleRun()}
                   disabled={isRunning}
                   className={cn(
                     "flex items-center gap-2 px-4 sm:px-5 py-2 rounded-full text-xs font-bold uppercase tracking-wider transition-all active:scale-95 shadow-xs",
