@@ -16,7 +16,8 @@ import {
   CornerDownLeft,
   Sparkles,
   Info,
-  Send
+  HelpCircle,
+  Keyboard
 } from 'lucide-react';
 import { RunResult } from '../types';
 import { cn } from '../lib/utils';
@@ -73,13 +74,13 @@ export function OutputPanel({
   const [copied, setCopied] = useState(false);
   
   // Height & Resizing state
-  const [height, setHeight] = useState<number>(290);
+  const [height, setHeight] = useState<number>(310);
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   
   // Ref for tracking drag calculations
   const dragStartYRef = useRef<number>(0);
-  const dragStartHeightRef = useRef<number>(290);
+  const dragStartHeightRef = useRef<number>(310);
 
   // Terminal Tabs State
   const [tabs, setTabs] = useState<TerminalTab[]>([
@@ -89,7 +90,9 @@ export function OutputPanel({
 
   // Direct Interactive Stdin on Main Terminal
   const [directInput, setDirectInput] = useState('');
+  const [isMultiLine, setIsMultiLine] = useState(false);
   const mainInputRef = useRef<HTMLInputElement>(null);
+  const mainTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Interactive Snippet Terminal Input State
   const [snippetInput, setSnippetInput] = useState('');
@@ -118,9 +121,9 @@ export function OutputPanel({
   const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
 
   // Submit direct input for the C++ program (cin / scanf)
-  const handleSendDirectInput = () => {
+  const handleSendDirectInput = (overrideVal?: string) => {
     if (isRunning) return;
-    const val = directInput;
+    const val = overrideVal !== undefined ? overrideVal : directInput;
     onRunDirect(val);
     setDirectInput('');
     setTimeout(() => {
@@ -302,8 +305,8 @@ export function OutputPanel({
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
       const delta = dragStartYRef.current - moveEvent.clientY;
-      const maxHeight = Math.min(window.innerHeight * 0.8, 650);
-      const minHeight = 120;
+      const maxHeight = Math.min(window.innerHeight * 0.85, 700);
+      const minHeight = 130;
       const newHeight = Math.max(minHeight, Math.min(dragStartHeightRef.current + delta, maxHeight));
       
       setHeight(newHeight);
@@ -330,8 +333,8 @@ export function OutputPanel({
     const handleTouchMove = (moveEvent: TouchEvent) => {
       if (moveEvent.touches.length !== 1) return;
       const delta = dragStartYRef.current - moveEvent.touches[0].clientY;
-      const maxHeight = Math.min(window.innerHeight * 0.8, 550);
-      const minHeight = 120;
+      const maxHeight = Math.min(window.innerHeight * 0.85, 600);
+      const minHeight = 130;
       const newHeight = Math.max(minHeight, Math.min(dragStartHeightRef.current + delta, maxHeight));
       
       setHeight(newHeight);
@@ -353,43 +356,115 @@ export function OutputPanel({
     setHeight(targetHeight);
   };
 
-  // Helper to render output with user input naturally inline (e.g. name: surya)
+  // Helper to render output with user input naturally inline (e.g. name: surya or length: 10, breadth: 20)
   const renderInteractiveRunOutput = (run: FileRunHistoryItem) => {
     const out = typeof run?.result?.runOutput === 'string' ? run.result.runOutput : '';
     const cleanStdin = typeof run?.stdin === 'string' ? run.stdin.trim() : '';
 
+    const hasMissingInputWarning = !cleanStdin && out && (
+      out.includes('Enter ') || out.includes('enter ') || out.includes('e+') || out.includes('e-') || out.includes('15746120') || out.includes('garbage') || out.includes('price:') || out.includes('breadth:')
+    );
+
     if (!cleanStdin || !out) {
       return (
-        <pre className="text-[#E2E8F0] whitespace-pre-wrap font-mono text-[13px] leading-relaxed selection:bg-emerald-500/30 py-0.5">
-          {out || (run?.result?.exitCode === 0 ? '(Program finished with exit code 0 and produced no standard output)' : '')}
-        </pre>
+        <div className="space-y-2">
+          <pre className="text-[#E2E8F0] whitespace-pre-wrap font-mono text-[13px] leading-relaxed selection:bg-emerald-500/30 py-0.5">
+            {out || (run?.result?.exitCode === 0 ? '(Program finished with exit code 0 and produced no standard output)' : '')}
+          </pre>
+          {hasMissingInputWarning && (
+            <div className="bg-[#241C15] border border-amber-500/40 rounded-xl p-3 text-xs text-amber-200 space-y-2.5 shadow-md">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold text-amber-300 text-sm">Program was expecting input (cin):</span>
+                  <p className="text-xs text-amber-200/90 mt-0.5">
+                    Because no standard input was provided, variables were never assigned and held uninitialized garbage memory (like <code className="text-amber-300 font-mono font-bold bg-black/40 px-1 py-0.5 rounded">7.95e-28</code> or <code className="text-amber-300 font-mono font-bold bg-black/40 px-1 py-0.5 rounded">1574612064</code>).
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-[#181512] rounded-lg p-2.5 border border-amber-500/20 space-y-2">
+                <div className="text-[11px] text-[#94A3B8] font-sans font-medium flex items-center justify-between">
+                  <span>⚡ Quick fix: Click a preset or type inputs below and run:</span>
+                </div>
+                
+                <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => handleSendDirectInput('10 20')}
+                    className="px-2.5 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 font-mono font-bold transition-all cursor-pointer active:scale-95"
+                  >
+                    10 20 (Length & Breadth)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSendDirectInput('101 C++Guide Surya 49.99')}
+                    className="px-2.5 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 font-mono font-bold transition-all cursor-pointer active:scale-95"
+                  >
+                    101 C++Guide Surya 49.99 (Book)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSendDirectInput('Surya')}
+                    className="px-2.5 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 font-mono font-bold transition-all cursor-pointer active:scale-95"
+                  >
+                    Surya (Name)
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       );
     }
 
-    const lines = out.split('\n');
-    const firstLine = typeof lines[0] === 'string' ? lines[0] : '';
-    const restLines = lines.slice(1);
-    const trimmedPrompt = typeof firstLine === 'string' ? firstLine.trim() : '';
+    const tokens = cleanStdin.split(/\s+/).filter(Boolean);
 
-    const isPrompt = trimmedPrompt.endsWith(':') || 
-                     trimmedPrompt.endsWith('?') || 
-                     trimmedPrompt.toLowerCase().includes('enter') || 
-                     trimmedPrompt.toLowerCase().includes('name') ||
-                     trimmedPrompt.toLowerCase().includes('length') ||
-                     trimmedPrompt.toLowerCase().includes('input');
+    // Multi-prompt interleaving logic
+    // Look for prompt phrases like "Enter length: ", "Enter breadth: ", "Enter ID: ", etc.
+    const promptRegex = /(?:(?:Enter|Input|Please enter|Type|Give)\s+[^:\n\r?]+:\s*|[^:\n\r?]+\?\s*)/gi;
+    const matches: { index: number; text: string }[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = promptRegex.exec(out)) !== null) {
+      matches.push({ index: m.index, text: m[0] });
+    }
 
-    if (isPrompt && !firstLine.includes(cleanStdin)) {
-      return (
-        <div className="font-mono text-[13px] leading-relaxed selection:bg-emerald-500/30 py-0.5">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[#E2E8F0]">{firstLine}</span>
-            <span className="text-emerald-300 font-bold bg-emerald-500/15 px-1.5 py-0.2 rounded border border-emerald-500/30">
-              {cleanStdin}
-            </span>
+    if (matches.length > 0 && tokens.length > 0) {
+      const items: React.ReactNode[] = [];
+      let tokenIdx = 0;
+
+      for (let i = 0; i < matches.length; i++) {
+        const cur = matches[i];
+        const next = matches[i + 1];
+        const promptStr = cur.text;
+        const val = tokenIdx < tokens.length ? tokens[tokenIdx++] : '';
+
+        items.push(
+          <div key={`prompt-${i}`} className="flex items-center gap-1.5 flex-wrap py-0.5">
+            <span className="text-[#E2E8F0]">{promptStr}</span>
+            {val && (
+              <span className="text-emerald-300 font-bold bg-emerald-500/20 px-1.5 py-0.5 rounded border border-emerald-500/40 font-mono text-[13px]">
+                {val}
+              </span>
+            )}
           </div>
-          {restLines.length > 0 && (
-            <pre className="text-[#E2E8F0] whitespace-pre-wrap mt-1">{restLines.join('\n')}</pre>
-          )}
+        );
+
+        if (!next) {
+          const remainder = out.slice(cur.index + cur.text.length).trim();
+          if (remainder) {
+            items.push(
+              <pre key={`rem-${i}`} className="text-[#E2E8F0] whitespace-pre-wrap mt-1 font-mono text-[13px] leading-relaxed">
+                {remainder}
+              </pre>
+            );
+          }
+        }
+      }
+
+      return (
+        <div className="space-y-0.5 font-mono text-[13px] leading-relaxed selection:bg-emerald-500/30 py-0.5">
+          {items}
         </div>
       );
     }
@@ -517,30 +592,30 @@ export function OutputPanel({
           <div className="hidden md:flex items-center gap-1 bg-[#181A22] p-0.5 rounded-md border border-[#2A2E3C] text-[10px] font-semibold text-[#858E9E]">
             <button
               type="button"
-              onClick={() => setPreset(180)}
+              onClick={() => setPreset(190)}
               className={cn(
                 "px-2 py-0.5 rounded transition-colors",
-                !isCollapsed && height <= 210 ? "bg-[#2A2E3C] text-white" : "hover:text-white"
+                !isCollapsed && height <= 220 ? "bg-[#2A2E3C] text-white" : "hover:text-white"
               )}
             >
               Compact
             </button>
             <button
               type="button"
-              onClick={() => setPreset(290)}
+              onClick={() => setPreset(310)}
               className={cn(
                 "px-2 py-0.5 rounded transition-colors",
-                !isCollapsed && height > 210 && height < 400 ? "bg-[#2A2E3C] text-white" : "hover:text-white"
+                !isCollapsed && height > 220 && height < 440 ? "bg-[#2A2E3C] text-white" : "hover:text-white"
               )}
             >
               Default
             </button>
             <button
               type="button"
-              onClick={() => setPreset(440)}
+              onClick={() => setPreset(480)}
               className={cn(
                 "px-2 py-0.5 rounded transition-colors",
-                !isCollapsed && height >= 400 ? "bg-[#2A2E3C] text-white" : "hover:text-white"
+                !isCollapsed && height >= 440 ? "bg-[#2A2E3C] text-white" : "hover:text-white"
               )}
             >
               Large
@@ -595,7 +670,7 @@ export function OutputPanel({
                     </div>
                     <div className="pt-2 flex items-center gap-2 text-[#94A3B8] text-xs">
                       <span className="text-emerald-400 font-bold">$</span>
-                      <span>Click <strong className="text-[#E2E8F0] font-semibold">"Run Code"</strong> or enter your inputs directly in the prompt below.</span>
+                      <span>Enter your values in the prompt bar below (e.g. <code className="text-emerald-400 font-bold">10 20</code> or <code className="text-emerald-400 font-bold">surya</code>) and click Send & Run!</span>
                     </div>
                   </div>
                 )}
@@ -667,41 +742,102 @@ export function OutputPanel({
               </div>
 
               {/* DIRECT TERMINAL INTERACTIVE PROMPT BAR (AT BOTTOM OF TERMINAL) */}
-              <div className="p-2.5 bg-[#171922] border-t border-[#252A38] shrink-0">
-                <div className="flex items-center gap-2 bg-[#1E2230] border border-[#2F364B] focus-within:border-emerald-500/80 rounded-xl px-3 py-1.5 shadow-inner transition-colors">
-                  <span className="text-emerald-400 font-bold text-sm select-none">❯</span>
-                  <input
-                    ref={mainInputRef}
-                    type="text"
-                    value={directInput}
-                    onChange={(e) => setDirectInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        handleSendDirectInput();
-                      }
-                    }}
-                    disabled={isRunning}
-                    placeholder='Type input for cin/scanf (e.g. surya or 25 40) and press Enter ↵'
-                    className="flex-1 bg-transparent border-0 outline-hidden text-[#E2E8F0] placeholder-[#64748B] text-xs font-mono"
-                  />
-                  
+              <div className="p-2.5 bg-[#171922] border-t border-[#252A38] shrink-0 space-y-1.5">
+                {/* Multi-value / Example Pills */}
+                <div className="flex items-center justify-between text-[10px] text-[#94A3B8]">
+                  <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+                    <span className="text-[#64748B] font-semibold shrink-0">Sample inputs for cin:</span>
+                    <button
+                      type="button"
+                      onClick={() => handleSendDirectInput('10 20')}
+                      className="px-2 py-0.5 rounded bg-[#202535] hover:bg-[#2D344B] text-emerald-300 border border-[#303850] transition-colors cursor-pointer"
+                    >
+                      10 20 (Length & Breadth)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSendDirectInput('101 C++Guide Surya 49.99')}
+                      className="px-2 py-0.5 rounded bg-[#202535] hover:bg-[#2D344B] text-emerald-300 border border-[#303850] transition-colors cursor-pointer"
+                    >
+                      101 BookTitle Surya 49.99 (ID/Title/Author/Price)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSendDirectInput('Surya')}
+                      className="px-2 py-0.5 rounded bg-[#202535] hover:bg-[#2D344B] text-emerald-300 border border-[#303850] transition-colors cursor-pointer"
+                    >
+                      Surya
+                    </button>
+                  </div>
+
                   <button
                     type="button"
-                    onClick={handleSendDirectInput}
-                    disabled={isRunning}
-                    className={cn(
-                      "flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-all shrink-0 active:scale-95 shadow-xs cursor-pointer",
-                      directInput.trim()
-                        ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs"
-                        : "bg-[#282E40] hover:bg-[#32394E] text-[#94A3B8] hover:text-white"
-                    )}
-                    title="Send input and run"
+                    onClick={() => setIsMultiLine(!isMultiLine)}
+                    className="text-[#64748B] hover:text-[#94A3B8] underline shrink-0 hidden sm:inline ml-2"
                   >
-                    <span>{directInput.trim() ? "Send & Run" : "Run"}</span>
-                    <CornerDownLeft className="w-3.5 h-3.5" />
+                    {isMultiLine ? "Single-line input" : "Multi-line input"}
                   </button>
                 </div>
+
+                {/* Input Controls */}
+                {isMultiLine ? (
+                  <div className="space-y-1.5">
+                    <textarea
+                      ref={mainTextareaRef}
+                      value={directInput}
+                      onChange={(e) => setDirectInput(e.target.value)}
+                      placeholder="Enter each input on a separate line, then click Send & Run..."
+                      rows={3}
+                      className="w-full bg-[#1E2230] border border-[#2F364B] focus:border-emerald-500/80 rounded-xl p-2.5 text-xs text-[#E2E8F0] font-mono placeholder-[#64748B] outline-hidden resize-none custom-scrollbar"
+                    />
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => handleSendDirectInput()}
+                        disabled={isRunning}
+                        className="flex items-center gap-1.5 px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer"
+                      >
+                        <span>Send & Run All Lines</span>
+                        <CornerDownLeft className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 bg-[#1E2230] border border-[#2F364B] focus-within:border-emerald-500/80 rounded-xl px-3 py-1.5 shadow-inner transition-colors">
+                    <span className="text-emerald-400 font-bold text-sm select-none">❯</span>
+                    <input
+                      ref={mainInputRef}
+                      type="text"
+                      value={directInput}
+                      onChange={(e) => setDirectInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleSendDirectInput();
+                        }
+                      }}
+                      disabled={isRunning}
+                      placeholder='Type inputs for cin (e.g. "10 20" or "101 C++Book Surya 50") and press Enter ↵'
+                      className="flex-1 bg-transparent border-0 outline-hidden text-[#E2E8F0] placeholder-[#64748B] text-xs font-mono"
+                    />
+                    
+                    <button
+                      type="button"
+                      onClick={() => handleSendDirectInput()}
+                      disabled={isRunning}
+                      className={cn(
+                        "flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-all shrink-0 active:scale-95 shadow-xs cursor-pointer",
+                        directInput.trim()
+                          ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs"
+                          : "bg-[#282E40] hover:bg-[#32394E] text-[#94A3B8] hover:text-white"
+                      )}
+                      title="Send input and run"
+                    >
+                      <span>{directInput.trim() ? "Send & Run" : "Run"}</span>
+                      <CornerDownLeft className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           ) : (
