@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { Program, RunResult } from './types';
 import { fetchPrograms, fetchProgram, createProgram, updateProgram, deleteProgram, runProgram, getLocalPrograms } from './lib/api';
+import { startInteractiveSession, InteractiveSession } from './lib/wsRunner';
 import { Sidebar } from './components/Sidebar';
 import { OutputPanel, FileRunHistoryItem } from './components/OutputPanel';
 import { NewProgramModal } from './components/NewProgramModal';
 import { BentoOverview } from './components/BentoOverview';
 import Editor, { useMonaco } from '@monaco-editor/react';
-import { Play, Save, Code2, Menu, Star, LayoutGrid, ChevronRight, Folder } from 'lucide-react';
+import { Play, Save, Code2, Menu, Star, LayoutGrid, ChevronRight, Folder, Square } from 'lucide-react';
 import { cn } from './lib/utils';
 import { AnimatePresence, motion } from 'framer-motion';
 
@@ -39,6 +40,11 @@ export default function App() {
   const [isSaving, setIsSaving] = useState(false);
   
   const [isRunning, setIsRunning] = useState(false);
+  const [isLiveRunning, setIsLiveRunning] = useState(false);
+  const [liveOutput, setLiveOutput] = useState('');
+  const [liveStatus, setLiveStatus] = useState<'idle' | 'compiling' | 'running' | 'done'>('idle');
+  const liveSessionRef = useRef<InteractiveSession | null>(null);
+  const currentLiveOutputRef = useRef<string>('');
   
   // Per-file Terminal Run History & Stdin State
   const [historyMap, setHistoryMap] = useState<Record<string, FileRunHistoryItem[]>>({});
@@ -219,56 +225,139 @@ export default function App() {
     saveProgramHistory(activeProgram.id, []);
   };
 
+  const handleKillSession = () => {
+    if (liveSessionRef.current) {
+      liveSessionRef.current.kill();
+      liveSessionRef.current = null;
+    }
+    setIsLiveRunning(false);
+    setIsRunning(false);
+    setLiveStatus('idle');
+  };
+
+  const handleSendStdin = (text: string) => {
+    if (liveSessionRef.current && isLiveRunning) {
+      const line = text.endsWith('\n') ? text : `${text}\n`;
+      currentLiveOutputRef.current += line;
+      setLiveOutput(currentLiveOutputRef.current);
+      liveSessionRef.current.sendStdin(line);
+    }
+  };
+
   const handleRun = async (directStdin?: unknown) => {
-    if (!activeProgram || isRunning) return;
+    if (!activeProgram || isRunning || isLiveRunning) return;
     
     const currentCode = typeof code === 'string' ? code : '';
     if (!isSaved) {
       await handleSave(activeProgram, currentCode);
     }
     
-    setIsRunning(true);
     const progId = activeProgram.id;
-    const currentStdin = typeof directStdin === 'string' 
-      ? directStdin 
-      : (typeof activeStdin === 'string' ? activeStdin : '');
+    const standard = activeProgram.cpp_standard || 'C++23';
+    const initialStdin = typeof directStdin === 'string' ? directStdin : '';
 
-    try {
-      const res = await runProgram(progId, currentStdin, currentCode);
-      
-      const prevRuns = historyMap[progId] || getProgramHistory(progId);
-      const newEntry: FileRunHistoryItem = {
-        id: `run_${Date.now()}`,
-        runNumber: prevRuns.length + 1,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        stdin: typeof currentStdin === 'string' && currentStdin.trim().length > 0 ? currentStdin : undefined,
-        result: res
-      };
-      
-      const nextHistory = [...prevRuns, newEntry];
-      setHistoryMap(prev => ({ ...prev, [progId]: nextHistory }));
-      saveProgramHistory(progId, nextHistory);
-    } catch (err) {
-      const prevRuns = historyMap[progId] || getProgramHistory(progId);
-      const errorEntry: FileRunHistoryItem = {
-        id: `run_${Date.now()}`,
-        runNumber: prevRuns.length + 1,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        stdin: typeof currentStdin === 'string' && currentStdin.trim().length > 0 ? currentStdin : undefined,
-        result: {
-          success: false,
-          compileOutput: '',
-          runOutput: String(err),
-          exitCode: 1,
-          timeMs: 0
+    setIsLiveRunning(true);
+    setIsRunning(true);
+    setLiveStatus('compiling');
+    setLiveOutput('Compiling C++ code (g++)...');
+    currentLiveOutputRef.current = '';
+
+    const startTime = Date.now();
+
+    const session = startInteractiveSession(currentCode, standard, {
+      onConnecting: () => {
+        setLiveStatus('compiling');
+        setLiveOutput('Connecting to compiler...');
+      },
+      onCompiling: () => {
+        setLiveStatus('compiling');
+        setLiveOutput('Compiling C++ code (g++)...');
+      },
+      onRunning: () => {
+        setLiveStatus('running');
+        setLiveOutput('');
+        currentLiveOutputRef.current = '';
+        if (initialStdin) {
+          session.sendStdin(initialStdin);
         }
-      };
-      const nextHistory = [...prevRuns, errorEntry];
-      setHistoryMap(prev => ({ ...prev, [progId]: nextHistory }));
-      saveProgramHistory(progId, nextHistory);
-    } finally {
-      setIsRunning(false);
-    }
+      },
+      onStdout: (text: string) => {
+        currentLiveOutputRef.current += text;
+        setLiveOutput(currentLiveOutputRef.current);
+      },
+      onStderr: (text: string) => {
+        currentLiveOutputRef.current += text;
+        setLiveOutput(currentLiveOutputRef.current);
+      },
+      onExit: (exitCode: number, timeMs: number) => {
+        setIsLiveRunning(false);
+        setIsRunning(false);
+        setLiveStatus('done');
+        liveSessionRef.current = null;
+
+        const finalOutput = currentLiveOutputRef.current;
+        const prevRuns = historyMap[progId] || getProgramHistory(progId);
+        const newEntry: FileRunHistoryItem = {
+          id: `run_${Date.now()}`,
+          runNumber: prevRuns.length + 1,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          stdin: initialStdin || undefined,
+          result: {
+            success: exitCode === 0,
+            compileOutput: 'Success',
+            runOutput: finalOutput,
+            exitCode,
+            timeMs: timeMs || (Date.now() - startTime)
+          }
+        };
+        const nextHistory = [...prevRuns, newEntry];
+        setHistoryMap(prev => ({ ...prev, [progId]: nextHistory }));
+        saveProgramHistory(progId, nextHistory);
+      },
+      onError: async (errMsg: string) => {
+        // Fallback to REST runProgram
+        console.warn('Live WebSocket failed, using REST fallback:', errMsg);
+        try {
+          const res = await runProgram(progId, initialStdin, currentCode);
+          const prevRuns = historyMap[progId] || getProgramHistory(progId);
+          const newEntry: FileRunHistoryItem = {
+            id: `run_${Date.now()}`,
+            runNumber: prevRuns.length + 1,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+            stdin: initialStdin || undefined,
+            result: res
+          };
+          const nextHistory = [...prevRuns, newEntry];
+          setHistoryMap(prev => ({ ...prev, [progId]: nextHistory }));
+          saveProgramHistory(progId, nextHistory);
+        } catch (restErr) {
+          const prevRuns = historyMap[progId] || getProgramHistory(progId);
+          const errorEntry: FileRunHistoryItem = {
+            id: `run_${Date.now()}`,
+            runNumber: prevRuns.length + 1,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+            stdin: initialStdin || undefined,
+            result: {
+              success: false,
+              compileOutput: errMsg,
+              runOutput: String(restErr),
+              exitCode: 1,
+              timeMs: Date.now() - startTime
+            }
+          };
+          const nextHistory = [...prevRuns, errorEntry];
+          setHistoryMap(prev => ({ ...prev, [progId]: nextHistory }));
+          saveProgramHistory(progId, nextHistory);
+        } finally {
+          setIsLiveRunning(false);
+          setIsRunning(false);
+          setLiveStatus('idle');
+          liveSessionRef.current = null;
+        }
+      }
+    });
+
+    liveSessionRef.current = session;
   };
 
   // Global Keyboard Shortcuts (Cmd+S / Ctrl+S and Cmd+Enter / Ctrl+Enter)
@@ -418,29 +507,40 @@ export default function App() {
                   </AnimatePresence>
                 </div>
                 
-                <button 
-                  onClick={() => handleRun()}
-                  disabled={isRunning}
-                  className={cn(
-                    "flex items-center gap-2 px-4 sm:px-5 py-2 rounded-full text-xs font-bold uppercase tracking-wider transition-all active:scale-95 shadow-xs",
-                    isRunning 
-                      ? "bg-zinc-200 text-zinc-400 cursor-not-allowed" 
-                      : "bg-[#1E1E1E] text-white hover:bg-black hover:shadow-md"
-                  )}
-                  title="Compile & Run (⌘ + Enter)"
-                >
-                  {isRunning ? (
-                    <>
-                      <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      <span>Building...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-3.5 h-3.5 fill-current text-[#BED88D]" />
-                      <span>Run Code</span>
-                    </>
-                  )}
-                </button>
+                {isLiveRunning ? (
+                  <button 
+                    onClick={() => handleKillSession()}
+                    className="flex items-center gap-2 px-4 sm:px-5 py-2 rounded-full text-xs font-bold uppercase tracking-wider transition-all active:scale-95 shadow-xs bg-rose-600 hover:bg-rose-700 text-white cursor-pointer shadow-rose-500/20"
+                    title="Stop running process"
+                  >
+                    <Square className="w-3.5 h-3.5 fill-current" />
+                    <span>Stop</span>
+                  </button>
+                ) : (
+                  <button 
+                    onClick={() => handleRun()}
+                    disabled={isRunning}
+                    className={cn(
+                      "flex items-center gap-2 px-4 sm:px-5 py-2 rounded-full text-xs font-bold uppercase tracking-wider transition-all active:scale-95 shadow-xs cursor-pointer",
+                      isRunning 
+                        ? "bg-zinc-200 text-zinc-400 cursor-not-allowed" 
+                        : "bg-[#1E1E1E] text-white hover:bg-black hover:shadow-md"
+                    )}
+                    title="Compile & Run (⌘ + Enter)"
+                  >
+                    {isRunning ? (
+                      <>
+                        <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        <span>Building...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-3.5 h-3.5 fill-current text-[#BED88D]" />
+                        <span>Run Code</span>
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
             </header>
 
@@ -478,6 +578,11 @@ export default function App() {
               onRunDirect={(stdinVal) => handleRun(stdinVal)}
               onClearHistory={handleClearHistory}
               cppStandard={activeProgram.cpp_standard}
+              isLiveRunning={isLiveRunning}
+              liveOutput={liveOutput}
+              liveStatus={liveStatus}
+              onSendStdin={handleSendStdin}
+              onKillSession={handleKillSession}
             />
           </>
         ) : (

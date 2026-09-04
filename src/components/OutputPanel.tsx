@@ -52,6 +52,11 @@ interface OutputPanelProps {
   onRunDirect: (stdinValue?: string) => void;
   onClearHistory: () => void;
   cppStandard?: string;
+  isLiveRunning?: boolean;
+  liveOutput?: string;
+  liveStatus?: 'idle' | 'compiling' | 'running' | 'done';
+  onSendStdin?: (text: string) => void;
+  onKillSession?: () => void;
 }
 
 const QUICK_SNIPPETS = [
@@ -69,7 +74,12 @@ export function OutputPanel({
   isRunning, 
   onRunDirect,
   onClearHistory, 
-  cppStandard = 'C++23' 
+  cppStandard = 'C++23',
+  isLiveRunning = false,
+  liveOutput = '',
+  liveStatus = 'idle',
+  onSendStdin,
+  onKillSession
 }: OutputPanelProps) {
   const [copied, setCopied] = useState(false);
   
@@ -90,8 +100,10 @@ export function OutputPanel({
 
   // Direct Interactive Stdin on Main Terminal
   const [directInput, setDirectInput] = useState('');
+  const [liveInputVal, setLiveInputVal] = useState('');
   const [isMultiLine, setIsMultiLine] = useState(false);
   const mainInputRef = useRef<HTMLInputElement>(null);
+  const liveInputRef = useRef<HTMLInputElement>(null);
   const mainTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Interactive Snippet Terminal Input State
@@ -103,25 +115,45 @@ export function OutputPanel({
   const snippetInputRef = useRef<HTMLInputElement>(null);
   const terminalScrollRef = useRef<HTMLDivElement>(null);
 
-  // Auto switch to main tab when program is running
+  // Auto switch to main tab when program is running or live session is active
   useEffect(() => {
-    if (isRunning) {
+    if (isRunning || isLiveRunning) {
       setActiveTabId('main');
       setIsCollapsed(false);
+      setTimeout(() => {
+        liveInputRef.current?.focus();
+      }, 100);
     }
-  }, [isRunning]);
+  }, [isRunning, isLiveRunning]);
 
-  // Scroll to bottom when new output appears in active tab
+  // Scroll to bottom when new output appears in active tab or liveOutput changes
   useEffect(() => {
     if (terminalScrollRef.current) {
       terminalScrollRef.current.scrollTop = terminalScrollRef.current.scrollHeight;
     }
-  }, [history, isRunning, tabs, activeTabId]);
+  }, [history, isRunning, isLiveRunning, liveOutput, tabs, activeTabId]);
 
   const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
 
+  // Send input to live running C++ process
+  const handleSendLiveInput = (overrideVal?: string) => {
+    const val = overrideVal !== undefined ? overrideVal : liveInputVal;
+    if (!val) return;
+    if (onSendStdin) {
+      onSendStdin(val);
+    }
+    setLiveInputVal('');
+    setTimeout(() => {
+      liveInputRef.current?.focus();
+    }, 50);
+  };
+
   // Submit direct input for the C++ program (cin / scanf)
   const handleSendDirectInput = (overrideVal?: string) => {
+    if (isLiveRunning) {
+      handleSendLiveInput(overrideVal);
+      return;
+    }
     if (isRunning) return;
     const val = overrideVal !== undefined ? overrideVal : directInput;
     onRunDirect(val);
@@ -659,7 +691,7 @@ export function OutputPanel({
                 className="flex-1 overflow-auto p-3 sm:p-4 custom-scrollbar text-[12.5px] leading-relaxed font-mono select-text space-y-4"
               >
                 {/* Ready Starter Notice */}
-                {history.length === 0 && !isRunning && (
+                {history.length === 0 && !isRunning && !isLiveRunning && (
                   <div className="flex flex-col justify-between text-[#64748B] py-2 space-y-2">
                     <div className="flex items-center gap-2 text-xs text-[#94A3B8]">
                       <span className="text-emerald-400 font-semibold">AiRus GCC / G++ Live Runner</span>
@@ -670,7 +702,7 @@ export function OutputPanel({
                     </div>
                     <div className="pt-2 flex items-center gap-2 text-[#94A3B8] text-xs">
                       <span className="text-emerald-400 font-bold">$</span>
-                      <span>Enter your values in the prompt bar below (e.g. <code className="text-emerald-400 font-bold">10 20</code> or <code className="text-emerald-400 font-bold">surya</code>) and click Send & Run!</span>
+                      <span>Click <strong>Run</strong> in the top header to start the live interactive C++ session!</span>
                     </div>
                   </div>
                 )}
@@ -726,8 +758,70 @@ export function OutputPanel({
                   );
                 })}
 
-                {/* In-progress Active Spinner */}
-                {isRunning && (
+                {/* LIVE INTERACTIVE TERMINAL SESSION STREAM */}
+                {isLiveRunning && (
+                  <div className="space-y-2.5 pb-4 border-b border-emerald-500/30 animate-in fade-in duration-200">
+                    <div className="flex items-center justify-between text-xs pb-1.5 border-b border-[#202838]">
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-2 w-2 relative">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                        </span>
+                        <span className="text-emerald-300 font-bold font-mono">./a.out (Live Interactive Session)</span>
+                        <span className="px-1.5 py-0.2 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded text-[10px] font-bold">
+                          {liveStatus === 'compiling' ? 'Compiling C++...' : 'Running & Waiting for Input'}
+                        </span>
+                      </div>
+                      {onKillSession && (
+                        <button
+                          type="button"
+                          onClick={onKillSession}
+                          className="px-2.5 py-0.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 rounded-md text-[10px] font-bold transition-all cursor-pointer"
+                        >
+                          ■ Stop Process
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Live Stream Output */}
+                    <pre className="text-[#E2E8F0] whitespace-pre-wrap font-mono text-[13px] leading-relaxed selection:bg-emerald-500/30">
+                      {liveOutput || 'Starting execution...'}
+                    </pre>
+
+                    {/* Inline Terminal Direct Input Line */}
+                    {liveStatus !== 'compiling' && (
+                      <div className="flex items-center gap-2 bg-[#1A1F2C] border-2 border-emerald-500/80 rounded-xl px-3 py-1.5 shadow-lg shadow-emerald-500/10">
+                        <span className="text-emerald-400 font-bold text-sm select-none">❯</span>
+                        <input
+                          ref={liveInputRef}
+                          type="text"
+                          value={liveInputVal}
+                          onChange={(e) => setLiveInputVal(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleSendLiveInput();
+                            }
+                          }}
+                          autoFocus
+                          placeholder="Type your input and press Enter ↵..."
+                          className="flex-1 bg-transparent border-0 outline-hidden text-[#E2E8F0] placeholder-[#64748B] text-xs font-mono font-medium"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleSendLiveInput()}
+                          className="flex items-center gap-1 px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-all cursor-pointer shrink-0 shadow-xs active:scale-95"
+                        >
+                          <span>Send</span>
+                          <CornerDownLeft className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* In-progress Active Spinner (fallback) */}
+                {isRunning && !isLiveRunning && (
                   <div className="flex flex-col items-center justify-center py-6 gap-2 text-[#94A3B8] border-t border-[#252A38]">
                     <div className="relative">
                       <div className="w-6 h-6 border-2 border-emerald-500/20 border-t-emerald-400 rounded-full animate-spin" />

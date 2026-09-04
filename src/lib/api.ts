@@ -1,6 +1,15 @@
 import { Program, RunResult } from '../types';
 
-const API_URL = (import.meta as any).env.VITE_API_URL || '';
+export const API_URL = (import.meta as any).env.VITE_API_URL || '';
+
+export function getWsUrl(): string {
+  const envUrl = (import.meta as any).env.VITE_API_URL || '';
+  if (envUrl) {
+    return envUrl.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:') + '/ws';
+  }
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}/ws`;
+}
 
 const LOCAL_STORAGE_KEY = 'airus_local_programs';
 const DELETED_IDS_KEY = 'airus_deleted_program_ids';

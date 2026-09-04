@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
+import http from 'http';
+import { WebSocketServer, WebSocket } from 'ws';
 import { v4 as uuidv4 } from 'uuid';
 import { exec, spawn } from 'child_process';
 import util from 'util';
@@ -498,8 +500,161 @@ using namespace std;
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
+  const server = http.createServer(app);
+  const wss = new WebSocketServer({ server, path: '/ws' });
+
+  wss.on('connection', (ws: WebSocket) => {
+    let runningChild: any = null;
+    let tempSourcePath = '';
+    let tempBinPath = '';
+    let killTimer: any = null;
+
+    const cleanUp = () => {
+      if (killTimer) clearTimeout(killTimer);
+      if (runningChild) {
+        try { runningChild.kill('SIGKILL'); } catch (_) {}
+        runningChild = null;
+      }
+      try {
+        if (tempSourcePath && fs.existsSync(tempSourcePath)) fs.unlinkSync(tempSourcePath);
+        if (tempBinPath && fs.existsSync(tempBinPath)) fs.unlinkSync(tempBinPath);
+      } catch (_) {}
+    };
+
+    ws.on('message', async (message: Buffer | string) => {
+      try {
+        const payload = JSON.parse(message.toString('utf-8'));
+        
+        if (payload.type === 'start') {
+          cleanUp();
+          const code = typeof payload.code === 'string' ? payload.code : '';
+          const standard = typeof payload.standard === 'string' ? payload.standard : 'c++23';
+          const fileId = uuidv4();
+          tempSourcePath = path.join(WORKSPACE_DIR, `ws_${fileId}.cpp`);
+          tempBinPath = path.join(WORKSPACE_DIR, `ws_${fileId}.exe`);
+
+          fs.writeFileSync(tempSourcePath, code, 'utf-8');
+          const start = Date.now();
+
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'compiling', data: 'Compiling C++ code...' }));
+          }
+
+          try {
+            await execPromise(`g++ -std=${standard.toLowerCase()} "${tempSourcePath}" -o "${tempBinPath}"`);
+          } catch (compileErr: any) {
+            const errOutput = compileErr.stderr || compileErr.stdout || String(compileErr);
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                type: 'error',
+                compileOutput: errOutput,
+                exitCode: 1,
+                timeMs: Date.now() - start
+              }));
+            }
+            cleanUp();
+            return;
+          }
+
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'running', data: 'Compiled successfully.\n' }));
+          }
+
+          try {
+            runningChild = spawn(tempBinPath, [], { windowsHide: true });
+          } catch (spawnErr: any) {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                type: 'error',
+                runOutput: `Failed to spawn process: ${spawnErr.message || String(spawnErr)}`,
+                exitCode: 1,
+                timeMs: Date.now() - start
+              }));
+            }
+            cleanUp();
+            return;
+          }
+
+          // Timeout limit for interactive session (60s)
+          killTimer = setTimeout(() => {
+            if (runningChild) {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                  type: 'stderr',
+                  data: '\n[Execution timeout: 60s limit reached]'
+                }));
+                ws.send(JSON.stringify({
+                  type: 'exit',
+                  exitCode: 124,
+                  timeMs: Date.now() - start
+                }));
+              }
+              cleanUp();
+            }
+          }, 60000);
+
+          runningChild.stdout?.on('data', (buf: Buffer) => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'stdout', data: buf.toString('utf-8') }));
+            }
+          });
+
+          runningChild.stderr?.on('data', (buf: Buffer) => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'stderr', data: buf.toString('utf-8') }));
+            }
+          });
+
+          runningChild.on('close', (code: number | null) => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                type: 'exit',
+                exitCode: code ?? 0,
+                timeMs: Date.now() - start
+              }));
+            }
+            cleanUp();
+          });
+
+          runningChild.on('error', (err: any) => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                type: 'error',
+                runOutput: err.message || String(err),
+                exitCode: 1,
+                timeMs: Date.now() - start
+              }));
+            }
+            cleanUp();
+          });
+        } else if (payload.type === 'stdin') {
+          if (runningChild && runningChild.stdin && !runningChild.stdin.destroyed) {
+            const text = typeof payload.data === 'string' ? payload.data : '';
+            const toSend = text.endsWith('\n') ? text : `${text}\n`;
+            runningChild.stdin.write(toSend);
+          }
+        } else if (payload.type === 'kill') {
+          cleanUp();
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'killed', data: 'Process stopped.' }));
+          }
+        }
+      } catch (e: any) {
+        console.error('WS Error:', e);
+      }
+    });
+
+    ws.on('close', () => {
+      cleanUp();
+    });
+
+    ws.on('error', () => {
+      cleanUp();
+    });
+  });
+
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on http://0.0.0.0:${PORT} with WebSocket support`);
   });
 }
 
