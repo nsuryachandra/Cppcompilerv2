@@ -162,10 +162,9 @@ export async function fetchPrograms(): Promise<Program[]> {
 
   try {
     const res = await fetch(`${API_URL}/api/programs`);
-    if (!res.ok) throw new Error('Failed to fetch programs from server');
+    if (!res.ok) throw new Error('Server returned non-200');
     const serverPrograms: Program[] = await res.json();
 
-    // Map existing server items
     const serverMap = new Map(serverPrograms.map(p => [p.id, p]));
     const needsUpload: Program[] = [];
 
@@ -188,7 +187,7 @@ export async function fetchPrograms(): Promise<Program[]> {
       }
     }
 
-    // Merge server with local updates
+    // Merge server with local updates without EVER wiping local code
     const mergedMap = new Map<string, Program>();
     for (const lp of local) {
       if (!deleted.has(lp.id)) mergedMap.set(lp.id, lp);
@@ -196,9 +195,12 @@ export async function fetchPrograms(): Promise<Program[]> {
     for (const sp of serverPrograms) {
       if (!deleted.has(sp.id)) {
         const localItem = mergedMap.get(sp.id);
-        if (!localItem || new Date(sp.updated_at).getTime() >= new Date(localItem.updated_at).getTime()) {
-          mergedMap.set(sp.id, { ...localItem, ...sp });
-        }
+        const resolvedContent = (sp.content && sp.content.trim()) ? sp.content : (localItem?.content || '');
+        mergedMap.set(sp.id, {
+          ...localItem,
+          ...sp,
+          content: resolvedContent
+        });
       }
     }
 
@@ -206,7 +208,7 @@ export async function fetchPrograms(): Promise<Program[]> {
     saveLocalPrograms(merged);
     return merged;
   } catch (err) {
-    console.warn('Backend API unreachable or offline, using permanent local storage:', err);
+    console.warn('Backend API offline or unreachable, serving from local store:', err);
     return local;
   }
 }
@@ -217,24 +219,27 @@ export async function fetchProgram(id: string): Promise<Program> {
 
   try {
     const res = await fetch(`${API_URL}/api/programs/${id}`);
-    if (!res.ok) throw new Error('Failed to fetch program from server');
-    const serverData = await res.json();
-    
-    // If local has more recent edit, keep local content
-    if (foundLocal && foundLocal.content && (!serverData.content || new Date(foundLocal.updated_at).getTime() > new Date(serverData.updated_at).getTime())) {
-      return foundLocal;
-    }
-    
-    if (foundLocal) {
-      const updated = { ...foundLocal, ...serverData };
+    if (res.ok) {
+      const serverData = await res.json();
+      const resolvedContent = (serverData.content && serverData.content.trim()) 
+        ? serverData.content 
+        : (foundLocal?.content || '');
+      
+      const updated = {
+        ...(foundLocal || {}),
+        ...serverData,
+        content: resolvedContent
+      } as Program;
+      
       saveLocalPrograms(local.map(p => p.id === id ? updated : p));
       return updated;
     }
-    return serverData;
-  } catch (err) {
-    if (foundLocal) return foundLocal;
-    throw new Error('Program not found');
+  } catch (_) {
+    // Network / server offline fallback
   }
+
+  if (foundLocal) return foundLocal;
+  throw new Error('Program not found');
 }
 
 export async function createProgram(name: string, content?: string, folder?: string): Promise<Program> {

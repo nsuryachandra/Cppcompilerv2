@@ -35,22 +35,25 @@ export async function initDb() {
       name TEXT NOT NULL,
       slug TEXT NOT NULL,
       source_path TEXT NOT NULL,
+      content TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       last_opened_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       is_favorite INTEGER DEFAULT 0,
       compiler TEXT DEFAULT 'g++',
-      cpp_standard TEXT DEFAULT 'C++17',
+      cpp_standard TEXT DEFAULT 'C++23',
       folder TEXT DEFAULT 'src/scratchpad',
       deleted_at DATETIME
     )
   `);
 
   try {
+    db.run("ALTER TABLE programs ADD COLUMN content TEXT");
+  } catch (e) {}
+
+  try {
     db.run("ALTER TABLE programs ADD COLUMN folder TEXT DEFAULT 'src/scratchpad'");
-  } catch (e) {
-    // Column may already exist
-  }
+  } catch (e) {}
 
   db.run(`
     CREATE TABLE IF NOT EXISTS runs (

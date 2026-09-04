@@ -27,6 +27,8 @@ function saveProgramHistory(programId: string, history: FileRunHistoryItem[]) {
   }
 }
 
+const LAST_ACTIVE_KEY = 'airus_last_active_program_id';
+
 export default function App() {
   const [programs, setPrograms] = useState<Program[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -47,6 +49,7 @@ export default function App() {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
   const monaco = useMonaco();
+  const autoSaveTimerRef = useRef<any>(null);
 
   useEffect(() => {
     if (monaco) {
@@ -77,6 +80,15 @@ export default function App() {
     try {
       const data = await fetchPrograms();
       setPrograms(data);
+
+      // Auto-restore last active file on page load / refresh
+      const lastId = localStorage.getItem(LAST_ACTIVE_KEY);
+      if (lastId) {
+        const found = data.find(p => p.id === lastId);
+        if (found) {
+          handleSelectProgram(lastId);
+        }
+      }
     } catch (err) {
       console.error(err);
     }
@@ -101,6 +113,7 @@ export default function App() {
       setActiveId(id);
       setCode(prog.content || '');
       setIsSaved(true);
+      localStorage.setItem(LAST_ACTIVE_KEY, id);
       
       // Load file history if not in memory
       if (!historyMap[id]) {
@@ -129,6 +142,7 @@ export default function App() {
         setActiveId(null);
         setActiveProgram(null);
         setCode('');
+        localStorage.removeItem(LAST_ACTIVE_KEY);
       }
       await loadPrograms();
     } catch (err) {
@@ -149,8 +163,20 @@ export default function App() {
   };
 
   const handleEditorChange = (value: string | undefined) => {
-    setCode(value || '');
+    const newCode = value || '';
+    setCode(newCode);
     setIsSaved(false);
+
+    if (activeProgram) {
+      // 1. Instantly save to local storage so refreshing NEVER loses code
+      updateProgram(activeProgram.id, { content: newCode });
+      
+      // 2. Debounce background server sync
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = setTimeout(() => {
+        setIsSaved(true);
+      }, 1000);
+    }
   };
 
   const handleSave = async (prog = activeProgram, currentCode = code) => {

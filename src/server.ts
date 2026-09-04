@@ -105,8 +105,23 @@ async function startServer() {
   // API Routes
   app.get('/api/programs', async (req, res) => {
     try {
-      const programs = await dbAll(`SELECT * FROM programs WHERE deleted_at IS NULL ORDER BY updated_at DESC`);
-      res.json(programs);
+      const programs = await dbAll<any>(`SELECT * FROM programs WHERE deleted_at IS NULL ORDER BY updated_at DESC`);
+      
+      // Ensure content is loaded for each program
+      const enriched = programs.map(p => {
+        let content = p.content || '';
+        if (!content && p.source_path) {
+          const fullPath = path.join(WORKSPACE_DIR, p.source_path);
+          if (fs.existsSync(fullPath)) {
+            try {
+              content = fs.readFileSync(fullPath, 'utf-8');
+            } catch (_) {}
+          }
+        }
+        return { ...p, content };
+      });
+
+      res.json(enriched);
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -126,10 +141,11 @@ async function startServer() {
         const slug = p.slug || p.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
         const fileName = p.source_path || `${slug}-${p.id.split('-')[0]}.cpp`;
         const sourcePath = path.join(WORKSPACE_DIR, fileName);
+        const fileContent = p.content || '';
 
-        if (p.content !== undefined) {
-          fs.writeFileSync(sourcePath, p.content, 'utf-8');
-        }
+        try {
+          fs.writeFileSync(sourcePath, fileContent, 'utf-8');
+        } catch (_) {}
 
         const existing = await dbGet('SELECT id FROM programs WHERE id = ?', [p.id]);
         if (existing) {
@@ -138,6 +154,7 @@ async function startServer() {
              name = ?, 
              slug = ?, 
              source_path = ?, 
+             content = ?,
              is_favorite = ?, 
              compiler = COALESCE(?, compiler), 
              cpp_standard = COALESCE(?, cpp_standard), 
@@ -145,19 +162,30 @@ async function startServer() {
              updated_at = COALESCE(?, CURRENT_TIMESTAMP), 
              deleted_at = NULL 
              WHERE id = ?`,
-            [p.name, slug, fileName, p.is_favorite ? 1 : 0, p.compiler || 'g++', p.cpp_standard || 'C++23', p.folder || 'src/scratchpad', p.updated_at || null, p.id]
+            [p.name, slug, fileName, fileContent, p.is_favorite ? 1 : 0, p.compiler || 'g++', p.cpp_standard || 'C++23', p.folder || 'src/scratchpad', p.updated_at || null, p.id]
           );
         } else {
           await dbRun(
-            `INSERT INTO programs (id, name, slug, source_path, created_at, updated_at, last_opened_at, is_favorite, compiler, cpp_standard, folder) 
-             VALUES (?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP), ?, ?, ?, ?)`,
-            [p.id, p.name, slug, fileName, p.created_at || null, p.updated_at || null, p.last_opened_at || null, p.is_favorite ? 1 : 0, p.compiler || 'g++', p.cpp_standard || 'C++23', p.folder || 'src/scratchpad']
+            `INSERT INTO programs (id, name, slug, source_path, content, created_at, updated_at, last_opened_at, is_favorite, compiler, cpp_standard, folder) 
+             VALUES (?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP), ?, ?, ?, ?)`,
+            [p.id, p.name, slug, fileName, fileContent, p.created_at || null, p.updated_at || null, p.last_opened_at || null, p.is_favorite ? 1 : 0, p.compiler || 'g++', p.cpp_standard || 'C++23', p.folder || 'src/scratchpad']
           );
         }
       }
 
-      const all = await dbAll(`SELECT * FROM programs WHERE deleted_at IS NULL ORDER BY updated_at DESC`);
-      res.json(all);
+      const all = await dbAll<any>(`SELECT * FROM programs WHERE deleted_at IS NULL ORDER BY updated_at DESC`);
+      const enriched = all.map(p => {
+        let content = p.content || '';
+        if (!content && p.source_path) {
+          const fullPath = path.join(WORKSPACE_DIR, p.source_path);
+          if (fs.existsSync(fullPath)) {
+            try { content = fs.readFileSync(fullPath, 'utf-8'); } catch (_) {}
+          }
+        }
+        return { ...p, content };
+      });
+
+      res.json(enriched);
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -165,14 +193,14 @@ async function startServer() {
 
   app.post('/api/programs', async (req, res) => {
     try {
-      const { name, content, folder } = req.body;
-      const id = uuidv4();
+      const { id: reqId, name, content, folder, cpp_standard } = req.body;
+      const id = reqId || uuidv4();
       const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
       const fileName = `${slug}-${id.split('-')[0]}.cpp`;
       const sourcePath = path.join(WORKSPACE_DIR, fileName);
       const programFolder = folder || 'src/scratchpad';
 
-      const programContent = content || `#include <iostream>
+      const programContent = content !== undefined ? content : `#include <iostream>
 
 using namespace std;
 
@@ -184,15 +212,23 @@ int main() {
       // Write file
       fs.writeFileSync(sourcePath, programContent, 'utf-8');
 
-      // Insert DB
-      await dbRun(
-        `INSERT INTO programs (id, name, slug, source_path, created_at, updated_at, last_opened_at, folder) 
-         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)`,
-        [id, name, slug, fileName, programFolder]
-      );
+      // Upsert DB
+      const existing = await dbGet('SELECT id FROM programs WHERE id = ?', [id]);
+      if (existing) {
+        await dbRun(
+          `UPDATE programs SET name = ?, slug = ?, source_path = ?, content = ?, folder = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+          [name, slug, fileName, programContent, programFolder, id]
+        );
+      } else {
+        await dbRun(
+          `INSERT INTO programs (id, name, slug, source_path, content, created_at, updated_at, last_opened_at, folder, cpp_standard) 
+           VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?)`,
+          [id, name, slug, fileName, programContent, programFolder, cpp_standard || 'C++23']
+        );
+      }
 
-      const newProgram = await dbGet('SELECT * FROM programs WHERE id = ?', [id]);
-      res.json(newProgram);
+      const newProgram = await dbGet<any>('SELECT * FROM programs WHERE id = ?', [id]);
+      res.json({ ...newProgram, content: programContent });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -204,9 +240,9 @@ int main() {
       if (!program) return res.status(404).json({ error: 'Not found' });
       
       const fullPath = path.join(WORKSPACE_DIR, program.source_path);
-      let content = '';
-      if (fs.existsSync(fullPath)) {
-        content = fs.readFileSync(fullPath, 'utf-8');
+      let content = program.content || '';
+      if (!content && fs.existsSync(fullPath)) {
+        try { content = fs.readFileSync(fullPath, 'utf-8'); } catch (_) {}
       }
       
       // Update last_opened_at
@@ -220,24 +256,37 @@ int main() {
 
   app.put('/api/programs/:id', async (req, res) => {
     try {
-      const { name, content, is_favorite, folder } = req.body;
+      const { name, content, is_favorite, folder, cpp_standard } = req.body;
       const program = await dbGet<any>('SELECT * FROM programs WHERE id = ?', [req.params.id]);
-      if (!program) return res.status(404).json({ error: 'Not found' });
+
+      const slug = name ? name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '') : (program?.slug || 'code');
+      const fileName = program?.source_path || `${slug}-${req.params.id.split('-')[0]}.cpp`;
+      const fullPath = path.join(WORKSPACE_DIR, fileName);
 
       if (content !== undefined) {
-        const fullPath = path.join(WORKSPACE_DIR, program.source_path);
         fs.writeFileSync(fullPath, content, 'utf-8');
       }
 
-      await dbRun(
-        `UPDATE programs SET 
-         name = COALESCE(?, name), 
-         is_favorite = COALESCE(?, is_favorite), 
-         folder = COALESCE(?, folder), 
-         updated_at = CURRENT_TIMESTAMP 
-         WHERE id = ?`,
-        [name !== undefined ? name : null, is_favorite !== undefined ? is_favorite : null, folder !== undefined ? folder : null, req.params.id]
-      );
+      if (!program) {
+        // Upsert new program if not in DB yet
+        await dbRun(
+          `INSERT INTO programs (id, name, slug, source_path, content, is_favorite, folder, cpp_standard, created_at, updated_at, last_opened_at) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+          [req.params.id, name || 'code.cpp', slug, fileName, content || '', is_favorite ? 1 : 0, folder || 'src/scratchpad', cpp_standard || 'C++23']
+        );
+      } else {
+        await dbRun(
+          `UPDATE programs SET 
+           name = COALESCE(?, name), 
+           content = COALESCE(?, content),
+           is_favorite = COALESCE(?, is_favorite), 
+           folder = COALESCE(?, folder), 
+           cpp_standard = COALESCE(?, cpp_standard),
+           updated_at = CURRENT_TIMESTAMP 
+           WHERE id = ?`,
+          [name !== undefined ? name : null, content !== undefined ? content : null, is_favorite !== undefined ? is_favorite : null, folder !== undefined ? folder : null, cpp_standard !== undefined ? cpp_standard : null, req.params.id]
+        );
+      }
 
       res.json({ success: true });
     } catch (err) {
