@@ -2,13 +2,30 @@ import { useState, useEffect, useRef } from 'react';
 import { Program, RunResult } from './types';
 import { fetchPrograms, fetchProgram, createProgram, updateProgram, deleteProgram, runProgram } from './lib/api';
 import { Sidebar } from './components/Sidebar';
-import { OutputPanel } from './components/OutputPanel';
+import { OutputPanel, FileRunHistoryItem } from './components/OutputPanel';
 import { NewProgramModal } from './components/NewProgramModal';
 import { BentoOverview } from './components/BentoOverview';
 import Editor, { useMonaco } from '@monaco-editor/react';
 import { Play, Save, Code2, Menu, Star, LayoutGrid, ChevronRight, Folder } from 'lucide-react';
 import { cn } from './lib/utils';
 import { AnimatePresence, motion } from 'framer-motion';
+
+function getProgramHistory(programId: string): FileRunHistoryItem[] {
+  try {
+    const raw = localStorage.getItem(`airus_history_${programId}`);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveProgramHistory(programId: string, history: FileRunHistoryItem[]) {
+  try {
+    localStorage.setItem(`airus_history_${programId}`, JSON.stringify(history));
+  } catch (err) {
+    console.error('Failed to save history', err);
+  }
+}
 
 export default function App() {
   const [programs, setPrograms] = useState<Program[]>([]);
@@ -20,7 +37,10 @@ export default function App() {
   const [isSaving, setIsSaving] = useState(false);
   
   const [isRunning, setIsRunning] = useState(false);
-  const [runResult, setRunResult] = useState<RunResult | null>(null);
+  
+  // Per-file Terminal Run History & Stdin State
+  const [historyMap, setHistoryMap] = useState<Record<string, FileRunHistoryItem[]>>({});
+  const [stdinMap, setStdinMap] = useState<Record<string, string>>({});
   
   const [isNewModalOpen, setIsNewModalOpen] = useState(false);
   const [newModalFolder, setNewModalFolder] = useState<string>('src/scratchpad');
@@ -81,7 +101,12 @@ export default function App() {
       setActiveId(id);
       setCode(prog.content || '');
       setIsSaved(true);
-      setRunResult(null);
+      
+      // Load file history if not in memory
+      if (!historyMap[id]) {
+        const loaded = getProgramHistory(id);
+        setHistoryMap(prev => ({ ...prev, [id]: loaded }));
+      }
     } catch (err) {
       console.error(err);
     }
@@ -141,26 +166,70 @@ export default function App() {
     }
   };
 
+  const activeHistory = activeProgram 
+    ? (historyMap[activeProgram.id] || getProgramHistory(activeProgram.id)) 
+    : [];
+
+  const activeStdin = activeProgram 
+    ? (stdinMap[activeProgram.id] || '') 
+    : '';
+
+  const handleStdinChange = (val: string) => {
+    if (!activeProgram) return;
+    setStdinMap(prev => ({ ...prev, [activeProgram.id]: val }));
+  };
+
+  const handleClearHistory = () => {
+    if (!activeProgram) return;
+    setHistoryMap(prev => ({ ...prev, [activeProgram.id]: [] }));
+    saveProgramHistory(activeProgram.id, []);
+  };
+
   const handleRun = async () => {
     if (!activeProgram || isRunning) return;
     
+    const currentCode = code;
     if (!isSaved) {
-      await handleSave();
+      await handleSave(activeProgram, currentCode);
     }
     
     setIsRunning(true);
-    setRunResult(null);
+    const progId = activeProgram.id;
+    const currentStdin = activeStdin;
+
     try {
-      const res = await runProgram(activeProgram.id);
-      setRunResult(res);
+      const res = await runProgram(progId, currentStdin, currentCode);
+      
+      const prevRuns = historyMap[progId] || getProgramHistory(progId);
+      const newEntry: FileRunHistoryItem = {
+        id: `run_${Date.now()}`,
+        runNumber: prevRuns.length + 1,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        stdin: currentStdin.trim() ? currentStdin : undefined,
+        result: res
+      };
+      
+      const nextHistory = [...prevRuns, newEntry];
+      setHistoryMap(prev => ({ ...prev, [progId]: nextHistory }));
+      saveProgramHistory(progId, nextHistory);
     } catch (err) {
-      setRunResult({
-        success: false,
-        compileOutput: '',
-        runOutput: String(err),
-        exitCode: 1,
-        timeMs: 0
-      });
+      const prevRuns = historyMap[progId] || getProgramHistory(progId);
+      const errorEntry: FileRunHistoryItem = {
+        id: `run_${Date.now()}`,
+        runNumber: prevRuns.length + 1,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        stdin: currentStdin.trim() ? currentStdin : undefined,
+        result: {
+          success: false,
+          compileOutput: '',
+          runOutput: String(err),
+          exitCode: 1,
+          timeMs: 0
+        }
+      };
+      const nextHistory = [...prevRuns, errorEntry];
+      setHistoryMap(prev => ({ ...prev, [progId]: nextHistory }));
+      saveProgramHistory(progId, nextHistory);
     } finally {
       setIsRunning(false);
     }
@@ -366,9 +435,13 @@ export default function App() {
             
             {/* Standout Terminal Output Panel */}
             <OutputPanel 
-              result={runResult} 
-              isRunning={isRunning} 
-              onClear={() => setRunResult(null)}
+              programId={activeProgram.id}
+              programName={activeProgram.name}
+              history={activeHistory}
+              isRunning={isRunning}
+              stdin={activeStdin}
+              onStdinChange={handleStdinChange}
+              onClearHistory={handleClearHistory}
               cppStandard={activeProgram.cpp_standard}
             />
           </>

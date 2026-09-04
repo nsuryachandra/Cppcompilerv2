@@ -3,6 +3,7 @@ import { Program, RunResult } from '../types';
 const API_URL = (import.meta as any).env.VITE_API_URL || '';
 
 const LOCAL_STORAGE_KEY = 'airus_local_programs';
+const DELETED_IDS_KEY = 'airus_deleted_program_ids';
 
 const DEFAULT_PROGRAMS: Program[] = [
   {
@@ -28,15 +29,48 @@ int main() {
     
     vector<string> features = {
         "Blazing-fast g++ compilation",
-        "Direct C++ one-liner evaluation",
-        "Multi-terminal tabs",
-        "Modern C++23 standards support"
+        "Full standard input (cin/scanf) support",
+        "Per-file terminal run history",
+        "Permanent cloud & local synchronization",
+        "Direct C++ expression evaluation"
     };
 
     for (const auto& feat : features) {
         cout << "  • " << feat << endl;
     }
 
+    return 0;
+}
+`
+  },
+  {
+    id: 'starter_input_demo',
+    name: 'user_input.cpp',
+    slug: 'user-input',
+    source_path: 'user_input.cpp',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    last_opened_at: new Date().toISOString(),
+    is_favorite: 1,
+    compiler: 'g++',
+    cpp_standard: 'C++23',
+    folder: 'src/examples',
+    content: `#include <iostream>
+#include <string>
+
+using namespace std;
+
+int main() {
+    int length, width;
+    cout << "Enter length and width: " << endl;
+    if (cin >> length >> width) {
+        int area = length * width;
+        int perimeter = 2 * (length + width);
+        cout << "Calculated Area: " << area << endl;
+        cout << "Calculated Perimeter: " << perimeter << endl;
+    } else {
+        cout << "Notice: Enter inputs in the 'Input (stdin)' tab below." << endl;
+    }
     return 0;
 }
 `
@@ -77,6 +111,25 @@ int main() {
   }
 ];
 
+function getDeletedIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DELETED_IDS_KEY);
+    return raw ? new Set(JSON.parse(raw)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function addDeletedId(id: string) {
+  try {
+    const set = getDeletedIds();
+    set.add(id);
+    localStorage.setItem(DELETED_IDS_KEY, JSON.stringify(Array.from(set)));
+  } catch (err) {
+    console.error('Failed to save deleted ID', err);
+  }
+}
+
 function getLocalPrograms(): Program[] {
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -84,7 +137,9 @@ function getLocalPrograms(): Program[] {
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(DEFAULT_PROGRAMS));
       return DEFAULT_PROGRAMS;
     }
-    return JSON.parse(raw);
+    const parsed: Program[] = JSON.parse(raw);
+    const deleted = getDeletedIds();
+    return parsed.filter(p => !deleted.has(p.id));
   } catch {
     return DEFAULT_PROGRAMS;
   }
@@ -92,108 +147,190 @@ function getLocalPrograms(): Program[] {
 
 function saveLocalPrograms(programs: Program[]) {
   try {
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(programs));
+    const deleted = getDeletedIds();
+    const clean = programs.filter(p => !deleted.has(p.id));
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(clean));
   } catch (err) {
     console.error('Failed to save to local storage', err);
   }
 }
 
+// Full bidirectional sync to keep data permanent across container redeploys
 export async function fetchPrograms(): Promise<Program[]> {
+  const local = getLocalPrograms();
+  const deleted = getDeletedIds();
+
   try {
     const res = await fetch(`${API_URL}/api/programs`);
     if (!res.ok) throw new Error('Failed to fetch programs from server');
-    const data = await res.json();
-    saveLocalPrograms(data);
-    return data;
+    const serverPrograms: Program[] = await res.json();
+
+    // Map existing server items
+    const serverMap = new Map(serverPrograms.map(p => [p.id, p]));
+    const needsUpload: Program[] = [];
+
+    // Check if local programs need to be restored to server (e.g. after fresh Render deploy)
+    for (const lp of local) {
+      if (!deleted.has(lp.id) && !serverMap.has(lp.id)) {
+        needsUpload.push(lp);
+      }
+    }
+
+    if (needsUpload.length > 0) {
+      try {
+        await fetch(`${API_URL}/api/sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ programs: local })
+        });
+      } catch (syncErr) {
+        console.warn('Sync upload notice:', syncErr);
+      }
+    }
+
+    // Merge server with local updates
+    const mergedMap = new Map<string, Program>();
+    for (const lp of local) {
+      if (!deleted.has(lp.id)) mergedMap.set(lp.id, lp);
+    }
+    for (const sp of serverPrograms) {
+      if (!deleted.has(sp.id)) {
+        const localItem = mergedMap.get(sp.id);
+        if (!localItem || new Date(sp.updated_at).getTime() >= new Date(localItem.updated_at).getTime()) {
+          mergedMap.set(sp.id, { ...localItem, ...sp });
+        }
+      }
+    }
+
+    const merged = Array.from(mergedMap.values());
+    saveLocalPrograms(merged);
+    return merged;
   } catch (err) {
-    console.warn('Backend API unreachable, using local persistent storage fallback:', err);
-    return getLocalPrograms();
+    console.warn('Backend API unreachable or offline, using permanent local storage:', err);
+    return local;
   }
 }
 
 export async function fetchProgram(id: string): Promise<Program> {
+  const local = getLocalPrograms();
+  const foundLocal = local.find(p => p.id === id);
+
   try {
     const res = await fetch(`${API_URL}/api/programs/${id}`);
     if (!res.ok) throw new Error('Failed to fetch program from server');
-    return await res.json();
+    const serverData = await res.json();
+    
+    // If local has more recent edit, keep local content
+    if (foundLocal && foundLocal.content && (!serverData.content || new Date(foundLocal.updated_at).getTime() > new Date(serverData.updated_at).getTime())) {
+      return foundLocal;
+    }
+    
+    if (foundLocal) {
+      const updated = { ...foundLocal, ...serverData };
+      saveLocalPrograms(local.map(p => p.id === id ? updated : p));
+      return updated;
+    }
+    return serverData;
   } catch (err) {
-    console.warn('Backend API unreachable, using local storage fallback for file:', id);
-    const progs = getLocalPrograms();
-    const found = progs.find(p => p.id === id);
-    if (!found) throw new Error('Program not found in local storage');
-    return found;
+    if (foundLocal) return foundLocal;
+    throw new Error('Program not found');
   }
 }
 
 export async function createProgram(name: string, content?: string, folder?: string): Promise<Program> {
+  const id = `prog_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const slug = name.toLowerCase().replace(/[^a-z0-9]/g, '-');
+  const newProg: Program = {
+    id,
+    name,
+    slug,
+    source_path: `${slug}-${id}.cpp`,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    last_opened_at: new Date().toISOString(),
+    is_favorite: 0,
+    compiler: 'g++',
+    cpp_standard: 'C++23',
+    folder: folder || 'src/scratchpad',
+    content: content || `#include <iostream>\nusing namespace std;\n\nint main() {\n    cout << "Hello, World!" << endl;\n    return 0;\n}\n`
+  };
+
+  // 1. Immediately save to browser permanent storage
+  const current = getLocalPrograms();
+  saveLocalPrograms([newProg, ...current]);
+
+  // 2. Sync to backend
   try {
-    const res = await fetch(`${API_URL}/api/programs`, {
+    await fetch(`${API_URL}/api/programs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, content, folder }),
+      body: JSON.stringify({
+        id: newProg.id,
+        name: newProg.name,
+        content: newProg.content,
+        folder: newProg.folder
+      }),
     });
-    if (!res.ok) throw new Error('Failed to create program on server');
-    return await res.json();
   } catch (err) {
-    console.warn('Backend API unreachable, creating program in local storage:', err);
-    const progs = getLocalPrograms();
-    const newProg: Program = {
-      id: `local_${Date.now()}`,
-      name,
-      slug: name.toLowerCase().replace(/[^a-z0-9]/g, '-'),
-      source_path: name,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      last_opened_at: new Date().toISOString(),
-      is_favorite: 0,
-      compiler: 'g++',
-      cpp_standard: 'C++23',
-      folder: folder || 'src/scratchpad',
-      content: content || `#include <iostream>\nusing namespace std;\n\nint main() {\n    cout << "Hello!" << endl;\n    return 0;\n}\n`
-    };
-    saveLocalPrograms([newProg, ...progs]);
-    return newProg;
+    console.warn('Backend currently offline, created in persistent local store:', err);
   }
+
+  return newProg;
 }
 
 export async function updateProgram(id: string, updates: Partial<Program>): Promise<void> {
+  // 1. Immediately update browser storage
+  const progs = getLocalPrograms();
+  let updatedContent = '';
+  const updatedList = progs.map(p => {
+    if (p.id === id) {
+      const merged = { ...p, ...updates, updated_at: new Date().toISOString() };
+      updatedContent = merged.content || '';
+      return merged;
+    }
+    return p;
+  });
+  saveLocalPrograms(updatedList);
+
+  // 2. Sync to server
   try {
-    const res = await fetch(`${API_URL}/api/programs/${id}`, {
+    await fetch(`${API_URL}/api/programs/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
     });
-    if (!res.ok) throw new Error('Failed to update program on server');
   } catch (err) {
-    console.warn('Backend API unreachable, updating local storage copy:', err);
-  } finally {
-    const progs = getLocalPrograms();
-    const updated = progs.map(p => p.id === id ? { ...p, ...updates, updated_at: new Date().toISOString() } : p);
-    saveLocalPrograms(updated);
+    console.warn('Backend sync deferred, saved to persistent local storage:', err);
   }
 }
 
 export async function deleteProgram(id: string): Promise<void> {
+  // 1. Mark as permanently deleted
+  addDeletedId(id);
+  const progs = getLocalPrograms();
+  saveLocalPrograms(progs.filter(p => p.id !== id));
+
+  // 2. Delete from server
   try {
-    const res = await fetch(`${API_URL}/api/programs/${id}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error('Failed to delete program on server');
+    await fetch(`${API_URL}/api/programs/${id}`, { method: 'DELETE' });
   } catch (err) {
-    console.warn('Backend API unreachable, deleting from local storage:', err);
-  } finally {
-    const progs = getLocalPrograms();
-    saveLocalPrograms(progs.filter(p => p.id !== id));
+    console.warn('Backend offline, deleted locally:', err);
   }
 }
 
-export async function runProgram(id: string): Promise<RunResult> {
+export async function runProgram(id: string, stdin?: string, content?: string): Promise<RunResult> {
   try {
-    const res = await fetch(`${API_URL}/api/programs/${id}/run`, { method: 'POST' });
+    const res = await fetch(`${API_URL}/api/programs/${id}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stdin, content })
+    });
     if (!res.ok) throw new Error('Failed to run program');
     return await res.json();
   } catch (err) {
     return {
       success: false,
-      compileOutput: `[AiRus Hosting Notice]\nBackend server is unreachable (${String(err)}).\n\nIf you are hosting statically on GitHub Pages, native C++ compilation via g++ requires an active backend server.\n\nTo enable full live compilation:\n1. Deploy the backend to Google Cloud Run, Render, or Railway.\n2. Set the VITE_API_URL environment variable to your backend URL.`,
+      compileOutput: `[AiRus Compiler Notice]\nBackend server is unreachable (${String(err)}).\n\nPlease verify that your Render backend is running at:\n${API_URL || 'https://cppcompilerv2.onrender.com'}`,
       runOutput: '',
       exitCode: 1,
       timeMs: 0
@@ -201,19 +338,19 @@ export async function runProgram(id: string): Promise<RunResult> {
   }
 }
 
-export async function runSnippet(snippet: string, cppStandard: string = 'c++23'): Promise<RunResult> {
+export async function runSnippet(snippet: string, cppStandard: string = 'c++23', stdin?: string): Promise<RunResult> {
   try {
     const res = await fetch(`${API_URL}/api/run-snippet`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ snippet, cpp_standard: cppStandard }),
+      body: JSON.stringify({ snippet, cpp_standard: cppStandard, stdin }),
     });
     if (!res.ok) throw new Error('Failed to execute snippet');
     return await res.json();
   } catch (err) {
     return {
       success: false,
-      compileOutput: `[AiRus Hosting Notice]\nBackend server is unreachable (${String(err)}).\nIn static hosting mode (GitHub Pages), set VITE_API_URL to your backend to run C++ code live.`,
+      compileOutput: `[AiRus Compiler Notice]\nBackend server is unreachable (${String(err)}).`,
       runOutput: '',
       exitCode: 1,
       timeMs: 0

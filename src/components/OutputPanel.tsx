@@ -15,18 +15,28 @@ import {
   Play,
   CornerDownLeft,
   Sparkles,
-  Code2,
-  Trash2
+  FileInput,
+  Trash2,
+  SlidersHorizontal,
+  Info
 } from 'lucide-react';
 import { RunResult } from '../types';
 import { cn } from '../lib/utils';
 import { runSnippet } from '../lib/api';
 
+export interface FileRunHistoryItem {
+  id: string;
+  runNumber: number;
+  timestamp: string;
+  stdin?: string;
+  result: RunResult;
+}
+
 export interface TerminalTab {
   id: string;
   name: string;
-  type: 'main' | 'interactive';
-  history: Array<{
+  type: 'main' | 'stdin' | 'interactive';
+  history?: Array<{
     id: string;
     command: string;
     result?: RunResult;
@@ -36,9 +46,13 @@ export interface TerminalTab {
 }
 
 interface OutputPanelProps {
-  result: RunResult | null;
+  programId?: string;
+  programName?: string;
+  history: FileRunHistoryItem[];
   isRunning: boolean;
-  onClear?: () => void;
+  stdin: string;
+  onStdinChange: (val: string) => void;
+  onClearHistory: () => void;
   cppStandard?: string;
 }
 
@@ -50,21 +64,31 @@ const QUICK_SNIPPETS = [
   { label: 'lambda', code: 'auto sq = [](int x){ return x*x; }; cout << "sq(7) = " << sq(7);' }
 ];
 
-export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' }: OutputPanelProps) {
+export function OutputPanel({ 
+  programId,
+  programName,
+  history, 
+  isRunning, 
+  stdin,
+  onStdinChange,
+  onClearHistory, 
+  cppStandard = 'C++23' 
+}: OutputPanelProps) {
   const [copied, setCopied] = useState(false);
   
   // Height & Resizing state
-  const [height, setHeight] = useState<number>(240);
+  const [height, setHeight] = useState<number>(270);
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   
   // Ref for tracking drag calculations
   const dragStartYRef = useRef<number>(0);
-  const dragStartHeightRef = useRef<number>(240);
+  const dragStartHeightRef = useRef<number>(270);
 
   // Terminal Tabs State
   const [tabs, setTabs] = useState<TerminalTab[]>([
-    { id: 'main', name: 'Main (Build & Run)', type: 'main', history: [] },
+    { id: 'main', name: 'Terminal Output', type: 'main' },
+    { id: 'stdin', name: 'Input (stdin)', type: 'stdin' },
   ]);
   const [activeTabId, setActiveTabId] = useState<string>('main');
 
@@ -90,7 +114,7 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
     if (terminalScrollRef.current) {
       terminalScrollRef.current.scrollTop = terminalScrollRef.current.scrollHeight;
     }
-  }, [result, tabs, activeTabId]);
+  }, [history, isRunning, tabs, activeTabId]);
 
   const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
 
@@ -129,12 +153,12 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
   // Close an extra terminal tab
   const handleCloseTab = (e: React.MouseEvent, idToClose: string) => {
     e.stopPropagation();
-    if (idToClose === 'main') return; // Cannot close main build terminal
+    if (idToClose === 'main' || idToClose === 'stdin') return;
 
     setTabs(prev => {
       const filtered = prev.filter(t => t.id !== idToClose);
       if (activeTabId === idToClose) {
-        setActiveTabId(filtered[filtered.length - 1]?.id || 'main');
+        setActiveTabId('main');
       }
       return filtered;
     });
@@ -143,7 +167,9 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
   // Clear active tab
   const handleClearCurrentTab = () => {
     if (activeTab.type === 'main') {
-      onClear?.();
+      onClearHistory();
+    } else if (activeTab.type === 'stdin') {
+      onStdinChange('');
     } else {
       setTabs(prev => prev.map(t => {
         if (t.id === activeTabId) {
@@ -159,7 +185,6 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
     const snippet = (codeToRun !== undefined ? codeToRun : inputValue).trim();
     if (!snippet || isExecutingSnippet) return;
 
-    // Add to local history for arrow navigation
     setCommandHistory(prev => [snippet, ...prev.filter(c => c !== snippet)]);
     setHistoryIndex(-1);
     setInputValue('');
@@ -168,13 +193,12 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
     const entryId = `cmd_${Date.now()}`;
     const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-    // Optimistically add entry with running state
     setTabs(prev => prev.map(t => {
       if (t.id === activeTabId) {
         return {
           ...t,
           history: [
-            ...t.history,
+            ...(t.history || []),
             {
               id: entryId,
               command: snippet,
@@ -188,12 +212,12 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
     }));
 
     try {
-      const res = await runSnippet(snippet, cppStandard);
+      const res = await runSnippet(snippet, cppStandard, stdin);
       setTabs(prev => prev.map(t => {
         if (t.id === activeTabId) {
           return {
             ...t,
-            history: t.history.map(item => {
+            history: (t.history || []).map(item => {
               if (item.id === entryId) {
                 return {
                   ...item,
@@ -212,7 +236,7 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
         if (t.id === activeTabId) {
           return {
             ...t,
-            history: t.history.map(item => {
+            history: (t.history || []).map(item => {
               if (item.id === entryId) {
                 return {
                   ...item,
@@ -240,7 +264,6 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
     }
   };
 
-  // Input key navigation (Enter to run, Up/Down for command history)
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -264,13 +287,18 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
 
   const handleCopy = () => {
     if (activeTab.type === 'main') {
-      if (!result) return;
-      const textToCopy = result.compileOutput !== 'Success' && result.compileOutput.trim()
-        ? result.compileOutput
-        : result.runOutput || 'Program exited with code 0';
-      navigator.clipboard.writeText(textToCopy);
+      if (history.length === 0) return;
+      const allRuns = history.map(h => {
+        const out = h.result.compileOutput !== 'Success' && h.result.compileOutput.trim()
+          ? h.result.compileOutput
+          : h.result.runOutput || 'Program exited with code 0';
+        return `[Run #${h.runNumber} - ${h.timestamp}]\n${h.stdin ? `stdin: ${h.stdin}\n` : ''}${out}`;
+      }).join('\n\n' + '='.repeat(40) + '\n\n');
+      navigator.clipboard.writeText(allRuns);
+    } else if (activeTab.type === 'stdin') {
+      navigator.clipboard.writeText(stdin);
     } else {
-      const logs = activeTab.history.map(h => {
+      const logs = (activeTab.history || []).map(h => {
         const out = h.result?.runOutput || h.result?.compileOutput || '';
         return `> ${h.command}\n${out}`;
       }).join('\n\n');
@@ -279,8 +307,6 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
-
-  const isCompileError = result && result.compileOutput !== 'Success' && !result.success && result.compileOutput.trim().length > 0;
 
   // Mouse Drag Handler
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -291,8 +317,8 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
       const delta = dragStartYRef.current - moveEvent.clientY;
-      const maxHeight = Math.min(window.innerHeight * 0.75, 620);
-      const minHeight = 110;
+      const maxHeight = Math.min(window.innerHeight * 0.8, 650);
+      const minHeight = 120;
       const newHeight = Math.max(minHeight, Math.min(dragStartHeightRef.current + delta, maxHeight));
       
       setHeight(newHeight);
@@ -319,8 +345,8 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
     const handleTouchMove = (moveEvent: TouchEvent) => {
       if (moveEvent.touches.length !== 1) return;
       const delta = dragStartYRef.current - moveEvent.touches[0].clientY;
-      const maxHeight = Math.min(window.innerHeight * 0.75, 550);
-      const minHeight = 110;
+      const maxHeight = Math.min(window.innerHeight * 0.8, 550);
+      const minHeight = 120;
       const newHeight = Math.max(minHeight, Math.min(dragStartHeightRef.current + delta, maxHeight));
       
       setHeight(newHeight);
@@ -341,6 +367,8 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
     setIsCollapsed(false);
     setHeight(targetHeight);
   };
+
+  const hasStdin = stdin.trim().length > 0;
 
   return (
     <div 
@@ -365,11 +393,11 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
         )} />
       </div>
 
-      {/* Terminal Titlebar & Multi-Terminal Tabs Header */}
+      {/* Terminal Titlebar & Tabs */}
       <div 
         className="flex items-center justify-between px-2 sm:px-3 h-[38px] bg-[#1E212B] border-b border-[#2A2E3C] shrink-0 select-none cursor-default gap-2"
       >
-        {/* Left: Collapse toggle + Terminal Tabs + Add Tab button */}
+        {/* Left: Collapse toggle + Tabs */}
         <div className="flex items-center gap-1 min-w-0 overflow-x-auto no-scrollbar py-0.5">
           {/* Collapse icon */}
           <button 
@@ -381,7 +409,7 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
             {isCollapsed ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
           </button>
 
-          {/* Terminal Tabs */}
+          {/* Tabs */}
           <div className="flex items-center gap-1 shrink-0">
             {tabs.map((tab) => {
               const isActive = tab.id === activeTabId;
@@ -401,27 +429,32 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
                       ? "bg-[#282D3D] text-white border-[#3F475D] shadow-xs"
                       : "text-[#94A3B8] hover:text-[#E2E8F0] hover:bg-[#232733] border-transparent"
                   )}
-                  title={tab.name}
                 >
                   {tab.type === 'main' ? (
                     <TerminalIcon className="w-3 h-3 text-[#34D399] shrink-0" />
+                  ) : tab.type === 'stdin' ? (
+                    <FileInput className={cn("w-3 h-3 shrink-0", hasStdin ? "text-amber-400" : "text-[#94A3B8]")} />
                   ) : (
                     <Sparkles className="w-3 h-3 text-amber-400 shrink-0" />
                   )}
 
                   <span className="truncate max-w-[120px] sm:max-w-none">{tab.name}</span>
 
-                  {/* Status indicator on tab */}
-                  {tab.type === 'main' && (
-                    isRunning ? (
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping ml-0.5" />
-                    ) : result ? (
-                      result.success ? (
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 ml-0.5" />
-                      ) : (
-                        <span className="w-1.5 h-1.5 rounded-full bg-rose-400 ml-0.5" />
-                      )
-                    ) : null
+                  {/* Main Tab Run Count Badge */}
+                  {tab.type === 'main' && history.length > 0 && (
+                    <span className="px-1.5 py-0.2 bg-[#1A1D27] border border-[#373E52] text-[#94A3B8] rounded text-[9px] font-bold">
+                      {history.length}
+                    </span>
+                  )}
+
+                  {/* Stdin Indicator */}
+                  {tab.type === 'stdin' && hasStdin && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Custom input active" />
+                  )}
+
+                  {/* Running Spinner on Main */}
+                  {tab.type === 'main' && isRunning && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping ml-0.5" />
                   )}
 
                   {/* Close button for extra terminals */}
@@ -452,40 +485,37 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
           </div>
         </div>
 
-        {/* Right: Presets, Clear, Copy, Resize Controls */}
+        {/* Right Controls */}
         <div className="flex items-center gap-1 sm:gap-2 text-xs shrink-0">
           {/* Quick Size Presets */}
           <div className="hidden md:flex items-center gap-1 bg-[#181A22] p-0.5 rounded-md border border-[#2A2E3C] text-[10px] font-semibold text-[#858E9E]">
             <button
               type="button"
-              onClick={() => setPreset(140)}
+              onClick={() => setPreset(160)}
               className={cn(
                 "px-2 py-0.5 rounded transition-colors",
-                !isCollapsed && height <= 170 ? "bg-[#2A2E3C] text-white" : "hover:text-white"
+                !isCollapsed && height <= 190 ? "bg-[#2A2E3C] text-white" : "hover:text-white"
               )}
-              title="Compact size"
             >
               Compact
             </button>
             <button
               type="button"
-              onClick={() => setPreset(240)}
+              onClick={() => setPreset(270)}
               className={cn(
                 "px-2 py-0.5 rounded transition-colors",
-                !isCollapsed && height > 170 && height < 340 ? "bg-[#2A2E3C] text-white" : "hover:text-white"
+                !isCollapsed && height > 190 && height < 380 ? "bg-[#2A2E3C] text-white" : "hover:text-white"
               )}
-              title="Default size"
             >
               Default
             </button>
             <button
               type="button"
-              onClick={() => setPreset(380)}
+              onClick={() => setPreset(420)}
               className={cn(
                 "px-2 py-0.5 rounded transition-colors",
-                !isCollapsed && height >= 340 ? "bg-[#2A2E3C] text-white" : "hover:text-white"
+                !isCollapsed && height >= 380 ? "bg-[#2A2E3C] text-white" : "hover:text-white"
               )}
-              title="Large size"
             >
               Large
             </button>
@@ -506,7 +536,7 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
               type="button"
               onClick={handleClearCurrentTab}
               className="p-1.5 hover:bg-[#282C38] text-[#94A3B8] hover:text-white rounded-md transition-colors"
-              title="Clear terminal output"
+              title="Clear terminal history for this file"
             >
               <RotateCcw className="w-3.5 h-3.5" />
             </button>
@@ -518,98 +548,182 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
       {!isCollapsed && (
         <div 
           ref={terminalScrollRef}
-          className="flex-1 overflow-auto p-3 sm:p-4 custom-scrollbar text-[12.5px] leading-relaxed bg-[#161820] font-mono select-text flex flex-col justify-between"
+          className="flex-1 overflow-auto p-3 sm:p-4 custom-scrollbar text-[12.5px] leading-relaxed bg-[#161820] font-mono select-text"
         >
           {activeTab.type === 'main' ? (
             /* ========================================================================= */
-            /* TAB 1: MAIN BUILD & RUN TAB                                              */
+            /* TAB 1: MAIN BUILD & RUN TAB (PER-FILE RUN HISTORY)                       */
             /* ========================================================================= */
-            <div>
-              {isRunning ? (
-                <div className="flex flex-col items-center justify-center py-8 gap-2.5 text-[#94A3B8]">
-                  <div className="relative">
-                    <div className="w-7 h-7 border-2 border-emerald-500/20 border-t-emerald-400 rounded-full animate-spin" />
-                    <Cpu className="w-3.5 h-3.5 text-emerald-400 absolute inset-0 m-auto" />
-                  </div>
-                  <div className="text-center">
-                    <p className="text-xs font-semibold text-[#CBD5E1]">g++ -std={cppStandard.toLowerCase()} -O3 main.cpp</p>
-                    <p className="text-[11px] text-[#64748B] mt-0.5">Compiling and running...</p>
-                  </div>
-                </div>
-              ) : !result ? (
-                <div className="flex flex-col justify-between text-[#64748B] py-1 space-y-2">
+            <div className="space-y-4">
+              {/* Ready / Starter Notice */}
+              {history.length === 0 && !isRunning && (
+                <div className="flex flex-col justify-between text-[#64748B] py-2 space-y-2">
                   <div className="flex items-center gap-2 text-xs text-[#94A3B8]">
-                    <span className="text-emerald-400 font-semibold">AiRus GCC 12.3</span>
-                    <span>•</span>
-                    <span>x86_64 Linux container</span>
+                    <span className="text-emerald-400 font-semibold">AiRus GCC / G++ Live Runner</span>
                     <span>•</span>
                     <span className="text-zinc-400">{cppStandard}</span>
+                    <span>•</span>
+                    <span className="text-emerald-400/80 font-mono text-[11px]">{programName || 'Active File'}</span>
                   </div>
                   <div className="pt-2 flex items-center gap-2 text-[#94A3B8] text-xs">
                     <span className="text-emerald-400 font-bold">$</span>
-                    <span>Ready. Click <strong className="text-[#E2E8F0] font-semibold">"Run Code"</strong> or press <kbd className="px-1.5 py-0.5 bg-[#202430] border border-[#2F3445] rounded text-[10px] text-[#CBD5E1]">⌘ + Enter</kbd></span>
+                    <span>Click <strong className="text-[#E2E8F0] font-semibold">"Run Code"</strong> (⌘ + Enter) to execute.</span>
                   </div>
-                  <div className="pt-2 text-[11px] text-[#64748B]">
-                    Want to test small lines or one-liners? Click <button onClick={handleAddTerminal} className="text-emerald-400 underline hover:text-emerald-300 font-semibold">+ Add Terminal</button> above!
+                  <div className="pt-2 flex items-center gap-2 text-[11px] text-[#64748B]">
+                    <Info className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>For programs expecting inputs (<code className="text-amber-300">cin &gt;&gt; var</code>), provide inputs in the <button onClick={() => setActiveTabId('stdin')} className="text-amber-400 underline font-bold">Input (stdin)</button> tab!</span>
                   </div>
                 </div>
-              ) : isCompileError ? (
-                <div className="space-y-2.5">
-                  <div className="flex items-center gap-2 text-rose-400 text-xs font-bold pb-1.5 border-b border-rose-500/20">
-                    <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-                    <span>Compiler Diagnostic Messages:</span>
-                  </div>
-                  <div className="bg-[#24171A] border border-rose-500/25 rounded-xl p-3 text-rose-200 whitespace-pre-wrap font-mono text-xs leading-relaxed selection:bg-rose-500/30">
-                    {result.compileOutput}
-                  </div>
-                  <p className="text-[11px] text-[#64748B]">
-                    Tip: Check missing semi-colons, include headers, or dialect syntax incompatibilities.
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-2.5">
-                  <div className="text-[#64748B] text-xs flex items-center gap-2 pb-1 border-b border-[#252A38]">
-                    <span className="text-emerald-400 font-bold">❯</span>
-                    <span>./a.out</span>
-                  </div>
+              )}
 
-                  {result.runOutput ? (
-                    <pre className="text-[#E2E8F0] whitespace-pre-wrap font-mono text-[13px] leading-relaxed selection:bg-emerald-500/30 py-0.5">
-                      {result.runOutput}
-                    </pre>
-                  ) : (
-                    <div className="text-[#64748B] italic text-xs py-1">
-                      (Program finished with exit code 0 and produced no standard output)
+              {/* Render each historical run for this file */}
+              {history.map((run, idx) => {
+                const isCompileErr = run.result.compileOutput !== 'Success' && !run.result.success && run.result.compileOutput.trim().length > 0;
+                return (
+                  <div 
+                    key={run.id || idx} 
+                    className="space-y-2 pb-3 border-b border-[#252A38] last:border-0"
+                  >
+                    {/* Run Header */}
+                    <div className="flex items-center justify-between text-xs pb-1 border-b border-[#202430]">
+                      <div className="flex items-center gap-2">
+                        <span className="text-emerald-400 font-bold">❯</span>
+                        <span className="text-white font-bold">./a.out</span>
+                        <span className="px-1.5 py-0.2 bg-[#232838] text-emerald-300 rounded text-[10px] font-bold">
+                          Run #{run.runNumber}
+                        </span>
+                        {run.stdin && (
+                          <span className="px-1.5 py-0.2 bg-amber-500/10 text-amber-300 border border-amber-500/20 rounded text-[10px] truncate max-w-[160px]" title={`stdin: ${run.stdin}`}>
+                            stdin: {run.stdin.replace(/\n/g, ' ')}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[10px] text-[#64748B]">{run.timestamp}</span>
                     </div>
-                  )}
 
-                  <div className="pt-2 border-t border-[#252A38] flex items-center justify-between text-[11px] text-[#64748B]">
-                    <span className={cn(
-                      "flex items-center gap-1 font-semibold",
-                      result.exitCode === 0 ? "text-emerald-400" : "text-rose-400"
-                    )}>
-                      {result.exitCode === 0 ? '✔' : '✖'} Exited with code {result.exitCode} in {result.timeMs}ms
-                    </span>
-                    <span className="text-[#64748B] text-[10px]">ISO {cppStandard}</span>
+                    {/* Output Content */}
+                    {isCompileErr ? (
+                      <div className="space-y-1.5 pt-1">
+                        <div className="flex items-center gap-2 text-rose-400 text-xs font-bold">
+                          <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                          <span>Compiler Diagnostics:</span>
+                        </div>
+                        <div className="bg-[#24171A] border border-rose-500/25 rounded-xl p-3 text-rose-200 whitespace-pre-wrap font-mono text-xs leading-relaxed selection:bg-rose-500/30">
+                          {run.result.compileOutput}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="pt-1">
+                        {run.result.runOutput ? (
+                          <pre className="text-[#E2E8F0] whitespace-pre-wrap font-mono text-[13px] leading-relaxed selection:bg-emerald-500/30 py-0.5">
+                            {run.result.runOutput}
+                          </pre>
+                        ) : (
+                          <div className="text-[#64748B] italic text-xs py-0.5">
+                            (Program finished with exit code {run.result.exitCode} and produced no standard output)
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Run Status Footer */}
+                    <div className="pt-1 flex items-center justify-between text-[11px] text-[#64748B]">
+                      <span className={cn(
+                        "flex items-center gap-1 font-semibold text-[11px]",
+                        run.result.exitCode === 0 ? "text-emerald-400" : "text-rose-400"
+                      )}>
+                        {run.result.exitCode === 0 ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
+                        <span>Exited with code {run.result.exitCode} in {run.result.timeMs}ms</span>
+                      </span>
+                      <span className="text-[#64748B] text-[10px] font-mono">ISO {cppStandard}</span>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* In-progress Active Spinner */}
+              {isRunning && (
+                <div className="flex flex-col items-center justify-center py-6 gap-2 text-[#94A3B8] border-t border-[#252A38]">
+                  <div className="relative">
+                    <div className="w-6 h-6 border-2 border-emerald-500/20 border-t-emerald-400 rounded-full animate-spin" />
+                    <Cpu className="w-3 h-3 text-emerald-400 absolute inset-0 m-auto" />
+                  </div>
+                  <div className="text-center">
+                    <p className="text-xs font-semibold text-[#CBD5E1]">g++ -std={cppStandard.toLowerCase()} {programName || 'main.cpp'}</p>
+                    <p className="text-[11px] text-[#64748B] mt-0.5">Compiling and running...</p>
                   </div>
                 </div>
               )}
             </div>
+          ) : activeTab.type === 'stdin' ? (
+            /* ========================================================================= */
+            /* TAB 2: STANDARD INPUT (STDIN) DRAWER                                      */
+            /* ========================================================================= */
+            <div className="flex flex-col h-full space-y-3">
+              <div className="flex items-center justify-between pb-1 border-b border-[#252A38]">
+                <div className="flex items-center gap-1.5 text-xs text-[#CBD5E1] font-semibold">
+                  <FileInput className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Program Standard Input (stdin)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {hasStdin && (
+                    <button
+                      type="button"
+                      onClick={() => onStdinChange('')}
+                      className="text-[10px] text-rose-400 hover:text-rose-300 font-semibold px-2 py-0.5 rounded hover:bg-rose-500/10 transition-colors"
+                    >
+                      Clear Input
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="text-[11px] text-[#94A3B8] leading-relaxed">
+                Provide the values that your C++ code expects via <code className="text-amber-300 bg-[#222634] px-1 py-0.5 rounded">cin &gt;&gt; var;</code>, <code className="text-amber-300 bg-[#222634] px-1 py-0.5 rounded">getline(cin, str);</code>, or <code className="text-amber-300 bg-[#222634] px-1 py-0.5 rounded">scanf(...)</code>.
+              </div>
+
+              <textarea
+                value={stdin}
+                onChange={(e) => onStdinChange(e.target.value)}
+                placeholder="Enter input values here (e.g.&#10;25 40&#10;or each value on a new line)..."
+                rows={5}
+                className="w-full flex-1 bg-[#1C1F2B] border border-[#2D3345] focus:border-emerald-500/70 rounded-xl p-3 text-xs text-[#E2E8F0] font-mono placeholder-[#64748B] outline-hidden resize-none custom-scrollbar shadow-inner"
+              />
+
+              {/* Sample preset input chips */}
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar text-[10px] pt-1">
+                <span className="text-[#64748B] font-semibold shrink-0">Sample Inputs:</span>
+                {[
+                  { label: '10 20', val: '10 20' },
+                  { label: '42', val: '42' },
+                  { label: '5 \n 1 2 3 4 5', val: '5\n1 2 3 4 5' },
+                  { label: 'Hello World', val: 'Hello World' },
+                ].map((item, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => onStdinChange(item.val)}
+                    className="px-2 py-0.5 rounded bg-[#202533] hover:bg-[#2B3145] text-[#94A3B8] hover:text-white border border-[#2D3344] whitespace-nowrap transition-colors cursor-pointer shrink-0"
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           ) : (
             /* ========================================================================= */
-            /* TAB 2+: DIRECT C++ RUNNER / INTERACTIVE TERMINAL                         */
+            /* TAB 3+: DIRECT C++ RUNNER / INTERACTIVE TERMINAL                         */
             /* ========================================================================= */
             <div className="flex flex-col h-full justify-between gap-3">
               {/* Output & Execution History */}
               <div className="space-y-3 overflow-y-auto pr-1">
-                {activeTab.history.length === 0 ? (
+                {(activeTab.history || []).length === 0 ? (
                   <div className="text-[#64748B] py-2 text-xs">
                     Terminal ready. Type any C++ code (e.g. <code className="text-emerald-400">cout &lt;&lt; 2 + 2;</code>) below and press Enter.
                   </div>
                 ) : (
-                  activeTab.history.map((item) => (
+                  (activeTab.history || []).map((item) => (
                     <div key={item.id} className="space-y-1.5 pb-2 border-b border-[#232735] last:border-0">
-                      {/* Command prompt line */}
                       <div className="flex items-center justify-between text-xs text-[#94A3B8]">
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="text-emerald-400 font-bold">❯</span>
@@ -620,7 +734,6 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
                         <span className="text-[10px] text-[#64748B] shrink-0 ml-2">{item.timestamp}</span>
                       </div>
 
-                      {/* Execution result or running status */}
                       {item.isRunning ? (
                         <div className="flex items-center gap-2 text-xs text-amber-300 py-1 pl-4">
                           <div className="w-3 h-3 border-2 border-amber-400/30 border-t-amber-400 rounded-full animate-spin" />
@@ -664,7 +777,6 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
 
               {/* Bottom Interactive Prompt & Quick Examples */}
               <div className="pt-2 border-t border-[#252A38] bg-[#161820] shrink-0 space-y-2">
-                {/* Quick Examples Pill Bar */}
                 <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar text-[10px]">
                   <span className="text-[#64748B] font-semibold shrink-0">Quick:</span>
                   {QUICK_SNIPPETS.map((chip, idx) => (
@@ -680,7 +792,6 @@ export function OutputPanel({ result, isRunning, onClear, cppStandard = 'C++23' 
                   ))}
                 </div>
 
-                {/* Direct C++ Input Box */}
                 <div className="flex items-center gap-2 bg-[#1C1F2B] border border-[#2D3345] focus-within:border-emerald-500/70 rounded-xl px-3 py-1.5 shadow-inner transition-colors">
                   <span className="text-emerald-400 font-bold text-sm select-none">❯</span>
                   <input
