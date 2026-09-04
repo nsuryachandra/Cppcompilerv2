@@ -10,7 +10,7 @@ import { createServer as createViteServer } from 'vite';
 
 const execPromise = util.promisify(exec);
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 const WORKSPACE_DIR = path.join(process.cwd(), 'workspace', 'programs');
 
 // Ensure programs directory exists

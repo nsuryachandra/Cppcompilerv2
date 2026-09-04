@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: c-compiler-backend
+    env: docker
+    dockerfilePath: Dockerfile
+    plan: free
+    region: oregon
+    envVars:
+      - key: NODE_ENV
+        value: production
