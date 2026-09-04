@@ -276,9 +276,9 @@ export function OutputPanel({
     if (activeTab.type === 'main') {
       if (history.length === 0) return;
       const allRuns = history.map(h => {
-        const out = h.result.compileOutput !== 'Success' && h.result.compileOutput.trim()
-          ? h.result.compileOutput
-          : h.result.runOutput || 'Program exited with code 0';
+        const compOut = typeof h?.result?.compileOutput === 'string' ? h.result.compileOutput : '';
+        const runOut = typeof h?.result?.runOutput === 'string' ? h.result.runOutput : '';
+        const out = compOut !== 'Success' && compOut.trim() ? compOut : (runOut || 'Program exited with code 0');
         return `[Run #${h.runNumber} - ${h.timestamp}]\n${h.stdin ? `input: ${h.stdin}\n` : ''}${out}`;
       }).join('\n\n' + '='.repeat(40) + '\n\n');
       navigator.clipboard.writeText(allRuns);
@@ -602,7 +602,8 @@ export function OutputPanel({
 
                 {/* Render each historical run for this file */}
                 {history.map((run, idx) => {
-                  const isCompileErr = run.result.compileOutput !== 'Success' && !run.result.success && run.result.compileOutput.trim().length > 0;
+                  const compOut = typeof run?.result?.compileOutput === 'string' ? run.result.compileOutput : '';
+                  const isCompileErr = compOut !== 'Success' && !run.result.success && compOut.trim().length > 0;
                   return (
                     <div 
                       key={run.id || idx} 

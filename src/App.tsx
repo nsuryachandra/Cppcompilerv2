@@ -244,7 +244,7 @@ export default function App() {
         id: `run_${Date.now()}`,
         runNumber: prevRuns.length + 1,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        stdin: currentStdin && currentStdin.trim() ? currentStdin : undefined,
+        stdin: typeof currentStdin === 'string' && currentStdin.trim().length > 0 ? currentStdin : undefined,
         result: res
       };
       
@@ -257,7 +257,7 @@ export default function App() {
         id: `run_${Date.now()}`,
         runNumber: prevRuns.length + 1,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        stdin: currentStdin && currentStdin.trim() ? currentStdin : undefined,
+        stdin: typeof currentStdin === 'string' && currentStdin.trim().length > 0 ? currentStdin : undefined,
         result: {
           success: false,
           compileOutput: '',
